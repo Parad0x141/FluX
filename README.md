@@ -401,16 +401,21 @@ The scheduler mutex protects a deliberately small coordination region. The previ
 
 ## Tools
 
-Std:c++20 (Latest)
-Microsoft C++ Build Tools v145
-Microsoft Visual Studio Insiders 2026
-Microsoft Windows Subsystems for Linux
-G++ compiler / Thread sanitizer / Address sanitizer
-Windows Performance Analyzer (WPA)
+**Compiler & Runtime**  
+- Std: C++20 (Latest)  
+- Microsoft C++ Build Tools v145  
+- Microsoft Visual Studio Insiders 2026  
+- Windows Subsystem for Linux (WSL)  
+- G++ / ThreadSanitizer / AddressSanitizer  
+
+**Profiling**  
+- Windows Performance Analyzer (WPA)
+
+---
 
 ## Visual Studio Extensions
-Rainbow Braces by Mads Kristensen
-ClaudiaIDE by Buchizo
+- Rainbow Braces — Mads Kristensen  
+- ClaudiaIDE — Buchizo
 
 
 ## Roadmap
