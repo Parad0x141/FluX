@@ -304,9 +304,6 @@ The benchmark is intentionally dominated by extremely small task submissions. Th
 
 The very small execution time relative to submission time also demonstrates that the worker side can drain the generated workload rapidly once tasks are distributed.
 
-### Previous 5M-task stress run
-
-
 Results vary depending on whether additional steal-window stress instrumentation is enabled.
 
 ### Benchmark interpretation
