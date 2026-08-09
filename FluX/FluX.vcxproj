@@ -147,6 +147,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ChaseLevDeque.hpp" />
+    <ClInclude Include="Helpers.hpp" />
     <ClInclude Include="MPMCQueue.hpp" />
     <ClInclude Include="Scheduler.hpp" />
     <ClInclude Include="TaskPool.hpp" />

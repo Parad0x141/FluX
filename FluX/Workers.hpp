@@ -37,7 +37,6 @@ struct Worker
     // TaskPool<Task, 131072> pool;                  ///< Task object pool (zero-allocation).
     MPMCQueue<Task*, 4096> inject_queue;
     TaskPool<Task, 4096> pool;
-    mutable std::mutex mtx;                          ///< Reserved for future synchronization.
     std::atomic<bool> shutdown{false};               ///< Termination flag (checked in WorkerLoop).
 };
 
