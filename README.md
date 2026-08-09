@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
 [![ThreadSanitizer](https://img.shields.io/badge/TSan-tested-success.svg)]()
-[![Throughput](https://img.shields.io/badge/benchmark-1.64M%20tasks%2Fs-orange.svg)]()
+[![Throughput](https://img.shields.io/badge/benchmark-3.30M%20tasks%2Fs-orange.svg)]()
 [![Tasks](https://img.shields.io/badge/stress%20test-100M%20tasks-purple.svg)]()
 
 > **FluX** — A low-latency C++20 work-stealing task scheduler with lock-free worker queues, lock-free task metadata tracking, and zero-allocation task recycling on steady-state hot paths.
@@ -281,22 +281,22 @@ This does **not** change what the mutex protects: `m_tasks_to_dispatch` and the 
 
 ## Benchmarks
 
-### Latest stress benchmark
+### Latest benchmark
 
 **Hardware:** Intel Core i7-4790K — 4C/8T
 **Tasks:** 100,000,000
 **Result:** 0 failed tasks
 
-| Metric                  |               Result |
-| ----------------------- | -------------------: |
-| Tasks                   |      **100,000,000** |
-| Submit time              |         **60.726 s** |
-| Execution time          |            **22 ms** |
-| Total time              |         **60.748 s** |
-| **Measured throughput** | **1.646M tasks/sec** |
-| Completed               |      **100,000,000** |
-| Failed                  |                **0** |
-| Successful steals       |        **2,150,303** |
+|         Metric          |               Result                |
+| ----------------------- | -------------------:                |
+| Tasks                   |      **100,000,000**                |
+| Submit time             |        **29,630 ms**                |
+| Execution time          |            **15 ms**                |
+| Total time              |        **29,646 ms**                |
+| **Measured throughput** | **3,373,136 tasks/sec (3.37M/sec)** |
+| Completed               |      **100,000,000**                |
+| Failed                  |                **0**                |
+| Successful steals       |        **10,973,662**               |
 
 > This benchmark predates the `ExecuteTask`/`DrainFallbackQueue` mutex-removal pass described above. Numbers pending re-run on real hardware; expect submit time to drop further since the per-task lock/unlock pair on the worker side is gone.
 
@@ -306,15 +306,6 @@ The very small execution time relative to submission time also demonstrates that
 
 ### Previous 5M-task stress run
 
-| Metric         |           Result |
-| -------------- | ---------------: |
-| Tasks          |        5,000,000 |
-| Submit time    |           ~6.3 s |
-| Execution time |        ~10–14 ms |
-| Throughput     | ~0.78M tasks/sec |
-| Completed      |        5,000,000 |
-| Failed         |                0 |
-| Steals         |     ~0.58M–0.66M |
 
 Results vary depending on whether additional steal-window stress instrumentation is enabled.
 
