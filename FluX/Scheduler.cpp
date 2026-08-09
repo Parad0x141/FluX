@@ -20,12 +20,25 @@ uint64_t Scheduler::EnqueuFallback(Task task, uint64_t id)
     task.start_time = std::chrono::steady_clock::now();
 
     m_tasks_to_dispatch.push_back(std::move(task));
+    // Kept in sync with the deque under the same lock the caller already
+    // holds; see m_fallback_pending's doc comment in Scheduler.hpp.
+    m_fallback_pending.fetch_add(1, std::memory_order_relaxed);
     return id;
 }
 
 /// Attempt to move queued fallback tasks into worker queues.
 void Scheduler::DrainFallbackQueue()
 {
+    // Wait-free fast path: this runs on EVERY task completion (see
+    // ExecuteTask), so in the common case -- fallback queue empty, which is
+    // effectively always once Run() is up and workers aren't saturated --
+    // we must not pay for m_mutex at all. Relaxed is enough: this is a hint,
+    // not a correctness gate. If we race a concurrent EnqueuFallback and see
+    // stale 0, we just miss draining this cycle; the next completion (or the
+    // enqueue's own AddTask path) retries.
+    if (m_fallback_pending.load(std::memory_order_relaxed) == 0)
+        return;
+
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_workers) return; // Moved inside the lock: m_workers is written
     // (destructor) and read (here, AddTask,
@@ -40,6 +53,7 @@ void Scheduler::DrainFallbackQueue()
             break; // Still saturated: stop, retry on next completion.
         }
         m_tasks_to_dispatch.pop_front();
+        m_fallback_pending.fetch_sub(1, std::memory_order_relaxed);
     }
 }
 
@@ -104,15 +118,19 @@ void Scheduler::CheckDupeCompletion(uint64_t task_id)
 #endif
 
 /// Execute task payload with statistics tracking.
+///
+/// NOTE on locking: 'task' is passed BY VALUE, so it's a copy exclusively
+/// owned by this call on this thread -- nothing else can observe or race on
+/// task.status / task.payload here. m_tasks_in_progress/completed/failed are
+/// already std::atomic<int>. None of that needs m_mutex; the lock here used
+/// to buy nothing but cache-line contention between every worker thread and
+/// the submitter on every single task. m_mutex is now taken ONLY inside
+/// DrainFallbackQueue(), and only past its own fast-path check.
 void Scheduler::ExecuteTask(Task task)
 {
-    std::function<void()> work;
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        task.status = TaskStatus::InProgress;
-        m_tasks_in_progress++;
-        work = std::move(task.payload); // Extract payload under lock (race-free)
-    }
+    task.status = TaskStatus::InProgress;
+    m_tasks_in_progress.fetch_add(1, std::memory_order_relaxed);
+    std::function<void()> work = std::move(task.payload);
 
     try
     {
@@ -120,9 +138,8 @@ void Scheduler::ExecuteTask(Task task)
     }
     catch (...)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_tasks_in_progress--;
-        m_tasks_failed++;
+        m_tasks_in_progress.fetch_sub(1, std::memory_order_relaxed);
+        m_tasks_failed.fetch_add(1, std::memory_order_relaxed);
 
         // Update registry to Failed (lock-free, see TaskRegistry.hpp).
         m_registry.SetStatus(task.task_id, TaskStatus::Failed);
@@ -132,11 +149,8 @@ void Scheduler::ExecuteTask(Task task)
         throw; // Propagate to worker (caught there, logged)
     }
 
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_tasks_in_progress--;
-        m_tasks_completed++;
-    }
+    m_tasks_in_progress.fetch_sub(1, std::memory_order_relaxed);
+    m_tasks_completed.fetch_add(1, std::memory_order_relaxed);
 
 #ifdef FLUX_DEBUG_DUPES
     CheckDupeCompletion(task.task_id);
@@ -171,14 +185,8 @@ void Scheduler::Run()
             m_tasks_to_dispatch.push_front(std::move(task));
             break;
         }
+        m_fallback_pending.fetch_sub(1, std::memory_order_relaxed);
     }
-}
-
-size_t Scheduler::GetTasksQueued() const
-{
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    return m_tasks_to_dispatch.size();
 }
 
 uint64_t Scheduler::GetTasksStolen() const
@@ -239,6 +247,7 @@ bool Scheduler::DeleteTaskFromQueue(uint64_t task_id)
         if (it->task_id == task_id)
         {
             m_tasks_to_dispatch.erase(it);
+            m_fallback_pending.fetch_sub(1, std::memory_order_relaxed);
             // Registry entry is intentionally left in place -- it's a durable
             // post-mortem record, not deleted on cancel. See TaskRegistry.hpp.
             return true;

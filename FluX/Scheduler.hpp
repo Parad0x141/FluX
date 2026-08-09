@@ -4,6 +4,7 @@
 #include <thread>
 #include <condition_variable>
 #include <mutex>
+#include <atomic>
 #include <cstdint>
 #include <chrono>
 #include <deque>
@@ -66,7 +67,11 @@ public:
     int GetTasksInProgress() const { return m_tasks_in_progress.load(); }
     int GetTasksCompleted() const { return m_tasks_completed.load(); }
     int GetTasksFailed() const { return m_tasks_failed.load(); }
-    size_t GetTasksQueued() const;
+    /// Wait-free (relaxed atomic load): no longer takes m_mutex. See
+    /// m_fallback_pending below -- kept in sync with m_tasks_to_dispatch by
+    /// every mutating call site (EnqueuFallback / DrainFallbackQueue /
+    /// DeleteTaskFromQueue / Run), so it never needs the lock to read.
+    size_t GetTasksQueued() const { return m_fallback_pending.load(std::memory_order_relaxed); }
     uint64_t GetTasksStolen() const;
 
 private:
@@ -93,6 +98,13 @@ private:
 #endif
 
     std::deque<Task>   m_tasks_to_dispatch;              ///< Fallback queue (pre-Run or saturated).
+    /// Mirrors m_tasks_to_dispatch.size(), updated under m_mutex at every
+    /// mutation site. Lets DrainFallbackQueue() and GetTasksQueued() take a
+    /// wait-free fast path (relaxed load, no lock) in the overwhelmingly
+    /// common case where the fallback queue is empty -- which after Run()
+    /// starts is effectively always, since AddTask only falls back when
+    /// Workers::SubmitTask() itself reports saturation.
+    std::atomic<size_t> m_fallback_pending{ 0 };
 
     TaskRegistry<> m_registry;                            ///< Task metadata by ID (lock-free hot path, see TaskRegistry.hpp).
 
@@ -103,5 +115,5 @@ private:
     std::atomic<uint64_t> m_next_task_id{ 1 };             ///< Monotonic task ID generator.
 
     std::unique_ptr<Workers> m_workers;                  ///< Worker thread pool (created on Run).
-    mutable std::mutex m_mutex;                          ///< Protects m_tasks_to_dispatch and m_cv.
+    mutable std::mutex m_mutex;                          ///< Protects m_tasks_to_dispatch, m_workers pointer swaps.
 };

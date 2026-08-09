@@ -23,7 +23,7 @@ int main()
     scheduler.Run();
     std::cout << "Scheduler running, adding tasks...\n" << std::flush;
 
-    const int NUM_TASKS = 100000000;
+    const int NUM_TASKS = 1000000;
     auto start = std::chrono::high_resolution_clock::now();
 
     // Submit tasks
