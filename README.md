@@ -283,7 +283,7 @@ This does **not** change what the mutex protects: `m_tasks_to_dispatch` and the 
 
 ### Latest benchmark
 
-**Hardware:** Intel Core i7-4790K — 4C/8T
+**Hardware:** Intel Core i7-4790K — 4C/8T (Rawr ! I'm a dinosaur !)
 **Tasks:** 100,000,000
 **Result:** 0 failed tasks
 
@@ -398,6 +398,20 @@ The architecture intentionally separates the performance-critical worker mechani
 The scheduler mutex protects a deliberately small coordination region. The previous registry mutex has been removed from the task tracking hot path, and the per-task execution accounting no longer takes it either — only the fallback queue and worker-lifecycle pointer still require it.
 
 ---
+
+## Tools
+
+Std:c++20 (Latest)
+Microsoft C++ Build Tools v145
+Microsoft Visual Studio Insiders 2026
+Microsoft Windows Subsystems for Linux
+G++ compiler / Thread sanitizer / Address sanitizer
+Windows Performance Analyzer (WPA)
+
+## Visual Studio Extensions
+Rainbow Braces by Mads Kristensen
+ClaudiaIDE by Buchizo
+
 
 ## Roadmap
 
