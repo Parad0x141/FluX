@@ -1,5 +1,12 @@
 # FluX
 
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
+[![ThreadSanitizer](https://img.shields.io/badge/TSan-tested-success.svg)]()
+[![Throughput](https://img.shields.io/badge/benchmark-1.64M%20tasks%2Fs-orange.svg)]()
+[![Tasks](https://img.shields.io/badge/stress%20test-100M%20tasks-purple.svg)]()
+
 > **FluX** — A low-latency C++20 work-stealing task scheduler with lock-free worker queues, lock-free task metadata tracking, and zero-allocation task recycling on steady-state hot paths.
 
 ---
