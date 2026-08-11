@@ -283,7 +283,7 @@ Chunk creation occurs only when a new task-ID range is reached and is resolved u
 `Scheduler::ExecuteTask` runs once per task, on whichever worker thread claimed it, so it sits directly on the hot path. It intentionally takes **no lock**:
 
 * `Task` is passed **by value** into `ExecuteTask`, so the copy is exclusively owned by the calling thread — nothing else can observe or race on its `status`/`payload` fields, no synchronization needed.
-* `m_tasks_in_progress`, `m_tasks_completed` and `m_tasks_failed` are `std::atomic<int>`; they're updated with direct `fetch_add`/`fetch_sub`, not read-modify-write under a lock.
+* `m_tasks_in_progress`, `m_tasks_completed` and `m_tasks_failed` are `std::atomic<int64_t>`; they're updated with direct `fetch_add`/`fetch_sub`, not read-modify-write under a lock.
 
 `DrainFallbackQueue()` is called from `ExecuteTask` on every single task completion, so it's on the same hot path. It now checks a relaxed atomic counter (`m_fallback_pending`, kept in sync with the fallback deque's size at every mutation site under `m_mutex`) before deciding whether to take the mutex at all. In steady state — fallback queue empty, which is the common case once `Run()` is up and workers aren't saturated — this is a single relaxed load and a return, no lock acquired. `GetTasksQueued()` uses the same counter and is now also lock-free.
 
