@@ -1,10 +1,14 @@
 # FluX
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
-[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
-[![ThreadSanitizer](https://img.shields.io/badge/TSan-tested-success.svg)]()
-[![Throughput](https://img.shields.io/badge/benchmark-3.37M%20tasks%2Fs-orange.svg)]()
-[![Tasks](https://img.shields.io/badge/stress%20test-100M%20tasks-purple.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![64-bit](https://img.shields.io/badge/arch-x86__64-blue.svg)]()
+[![TSan](https://img.shields.io/badge/TSan-tested-success.svg)]()
+[![ASan](https://img.shields.io/badge/ASan-tested-success.svg)]()
+[![UBSan](https://img.shields.io/badge/UBSan-tested-success.svg)]()
+[![Benchmark](https://img.shields.io/badge/benchmark-3.84M%20tasks%2Fs-orange.svg)]()
+[![Stress test](https://img.shields.io/badge/stress-3B%20tasks-purple.svg)]()
 
 > **FluX** — A low-latency C++20 work-stealing task scheduler with lock-free worker queues, lock-free task metadata tracking, and zero-allocation task recycling on steady-state hot paths.
 
