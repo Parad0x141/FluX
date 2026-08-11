@@ -1,7 +1,6 @@
 # FluX
 
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
 [![ThreadSanitizer](https://img.shields.io/badge/TSan-tested-success.svg)]()
 [![Throughput](https://img.shields.io/badge/benchmark-3.37M%20tasks%2Fs-orange.svg)]()
