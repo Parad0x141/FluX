@@ -6,6 +6,7 @@
 #include <memory>
 #include <utility>
 
+
 /// Lock-free MPMC (Multiple-Producer Multiple-Consumer) bounded queue.
 /// 
 /// Based on Dmitry Vyukov's bounded MPMC queue algorithm.

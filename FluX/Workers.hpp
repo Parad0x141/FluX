@@ -11,6 +11,7 @@
 #include "MPMCQueue.hpp"
 #include "TaskPool.hpp"
 
+
 /// Per-worker state: owns a Chase-Lev deque, injection queue, and task pool.
 /// 
 /// - queue: Owner-only work-stealing deque (LIFO push/pop, FIFO steal).
@@ -79,7 +80,7 @@ public:
     bool IsIdle(size_t worker_index) const;
 
     /// Total successful steals across all workers.
-    uint64_t GetStealCount() const noexcept { return steal_count.load(std::memory_order_relaxed); }
+    int64_t GetStealCount() const noexcept { return steal_count.load(std::memory_order_relaxed); }
 
 private:
     /// Main worker loop: execute local tasks, drain injections, steal, yield.
@@ -99,7 +100,7 @@ private:
     std::vector<std::unique_ptr<Worker>> m_workers;                ///< Worker states (owned).
     alignas(64) std::atomic<size_t>      m_round_robin_index{0};   ///< Round-robin counter (cache-line aligned).
     alignas(64) std::atomic<size_t>      m_steal_start{0};         ///< Steal victim start index (cache-line aligned).
-    alignas(64) std::atomic<uint64_t>    steal_count{ 0 };         ///< Total successful steals.
+    alignas(64) std::atomic<int64_t>     steal_count{ 0 };         ///< Total successful steals.
     Executor m_executor;                                           ///< Task execution callback.
 
 };

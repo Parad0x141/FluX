@@ -189,7 +189,7 @@ void Scheduler::Run()
     }
 }
 
-uint64_t Scheduler::GetTasksStolen() const
+int64_t Scheduler::GetTasksStolen() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_workers) return 0;

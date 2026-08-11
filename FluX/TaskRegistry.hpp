@@ -8,6 +8,7 @@
 
 #include "Types.hpp"
 
+
 /// Metadata-only registry of tasks, indexed by task_id, built for
 /// observability (status/timing/priority queries, post-mortem debugging)
 /// WITHOUT a shared lock on the hot path.

@@ -13,26 +13,21 @@
 
 #include "Scheduler.hpp"
 #include "Helpers.hpp"
+#include "FTXUIDashboard.hpp"
 
 
-/// Benchmark: submit and execute NUM_TASKS tasks, measure throughput.
-/// 
-/// Each task performs a small computation loop (100 iterations)
-/// to simulate real work while keeping execution time measurable.
-/// 
-/// This does not obviously replace my lazyness about making some proper test units :)...
-int main()
+/// Console benchmark: submit and execute NUM_TASKS tasks, measure throughput.
+/// Unchanged behavior from before -- this is the USE_FTXUI_DASHBOARD == false
+/// path in main() below.
+static void RunConsoleBenchmark(Scheduler& scheduler)
 {
-    std::cout << "Starting scheduler...\n" << std::flush;
-    Scheduler scheduler;
-    scheduler.Run();
     std::cout << "Scheduler running, adding tasks...\n" << std::flush;
 
-    const int NUM_TASKS = 100000000;
+    const int64_t NUM_TASKS = 10000;
     auto start = std::chrono::high_resolution_clock::now();
 
     // Submit tasks
-    for (int i = 0; i < NUM_TASKS; ++i)
+    for (int64_t i = 0; i < NUM_TASKS; ++i)
     {
         Task task;
 
@@ -60,9 +55,9 @@ int main()
     // Wait for all tasks to complete (polling with 10ms sleep)
     while (true)
     {
-        int completed = scheduler.GetTasksCompleted();
-        int in_progress = scheduler.GetTasksInProgress();
-        int failed = scheduler.GetTasksFailed();
+        int64_t completed = scheduler.GetTasksCompleted();
+        int64_t in_progress = scheduler.GetTasksInProgress();
+        int64_t failed = scheduler.GetTasksFailed();
         if (completed + failed >= NUM_TASKS && in_progress == 0)
             break;
 
@@ -92,6 +87,29 @@ int main()
     std::cout << "Completed: " << FormatWithCommas(scheduler.GetTasksCompleted()) << "\n";
     std::cout << "Failed: " << FormatWithCommas(scheduler.GetTasksFailed()) << "\n";
     std::cout << "Steals: " << FormatWithCommas(scheduler.GetTasksStolen()) << "\n";
+}
+
+int main()
+{
+    // Flip this to switch between the interactive FTXUI dashboard (type the
+    // task count, relaunch runs live, see stats update in place) and the
+    // original hardcoded console benchmark. Both paths run against the same
+    // Scheduler/Workers.
+    const bool USE_FTXUI_DASHBOARD = true;
+
+    std::cout << "Starting scheduler...\n" << std::flush;
+    Scheduler scheduler;
+    scheduler.Run();
+
+    if (USE_FTXUI_DASHBOARD)
+    {
+        FTXUIDashboard dashboard(scheduler);
+        dashboard.Run(); // Blocks until the user quits from the dashboard.
+    }
+    else
+    {
+        RunConsoleBenchmark(scheduler);
+    }
 
     return EXIT_SUCCESS;
 }

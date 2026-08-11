@@ -1,0 +1,74 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <string>
+#include <thread>
+
+class Scheduler;
+
+/// Quick and dirty Interactive terminal dashboard (FTXUI) for FluX.
+///
+/// Lets the user type a task count, launch a benchmark run against the
+/// already-running Scheduler, and watch live stats (completed/failed/
+/// in-progress/steals/throughput) update while it runs.
+///
+/// IMPORTANT: Scheduler's stat counters (GetTasksCompleted/Failed/InProgress)
+/// are cumulative for the Scheduler's whole lifetime, not per-run. Running
+/// the benchmark more than once from the dashboard without restarting the
+/// process means task_ids keep climbing and the counters keep accumulating.
+/// RunBenchmarkThread() below snapshots the counters before submitting so
+/// each run's displayed stats are a DELTA against that baseline, not a
+/// reset, there is no way to reset the Scheduler's own atomics short of
+/// destroying and recreating it (which would also tear down and respawn
+/// every worker thread).
+class FTXUIDashboard
+{
+public:
+    /// @param scheduler Must already have had Run() called (workers started)
+    /// before Run() on this dashboard is invoked.
+    explicit FTXUIDashboard(Scheduler& scheduler);
+    ~FTXUIDashboard();
+
+    FTXUIDashboard(const FTXUIDashboard&) = delete;
+    FTXUIDashboard& operator=(const FTXUIDashboard&) = delete;
+
+    /// Blocks until the user quits (the "Quitter" button, or 'q').
+    /// If a benchmark is still running when the user quits, this waits for
+    /// its submission loop to finish (the background thread is joined)
+    /// before returning, it does NOT wait for already-submitted tasks
+    /// still in-flight on the Scheduler's workers, since those keep running
+    /// independently of the dashboard.
+    void Run();
+
+private:
+    /// Runs on a background thread so the UI stays responsive while
+    /// submitting. Submits num_tasks fire-and-forget tasks, records
+    /// submit/exec/total timings, and flips m_benchmark_running back to
+    /// false when the Scheduler reports every submitted task has completed
+    /// or failed.
+    void RunBenchmarkThread(int64_t num_tasks);
+
+    Scheduler& m_scheduler;
+
+    std::string m_input_value = "10000";
+    std::string m_status_line;
+
+    std::atomic<bool> m_benchmark_running{ false };
+    std::atomic<bool> m_quit_requested{ false };
+
+    // Snapshot of Scheduler counters taken right before submission starts,
+    // so the dashboard can show THIS run's numbers instead of the
+    // Scheduler's lifetime totals. See class comment above.
+    std::atomic<int64_t>  m_baseline_completed{ 0 };
+    std::atomic<int64_t>  m_baseline_failed{ 0 };
+    std::atomic<int64_t> m_baseline_stolen{ 0 };
+
+    std::atomic<int64_t>  m_last_num_tasks{ 0 };
+    std::atomic<int64_t>  m_last_submit_ms{ 0 };
+    std::atomic<int64_t>  m_last_exec_ms{ 0 };
+    std::atomic<int64_t>  m_last_total_ms{ 0 };
+    std::atomic<double>   m_last_throughput{ 0.0 };
+
+    std::thread m_benchmark_thread; ///< Joined in Run()/dtor before returning / on next launch.
+};

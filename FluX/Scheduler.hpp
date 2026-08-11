@@ -15,6 +15,7 @@
 #include "Workers.hpp"
 #include "TaskRegistry.hpp"
 
+
 /// High-level task scheduler with work-stealing thread pool.
 /// 
 /// Public API for task submission, tracking, and control.
@@ -64,15 +65,15 @@ public:
     Task GetTaskById(uint64_t task_id);
 
     /// Wait-free statistics (atomic loads)
-    int GetTasksInProgress() const { return m_tasks_in_progress.load(); }
-    int GetTasksCompleted() const { return m_tasks_completed.load(); }
-    int GetTasksFailed() const { return m_tasks_failed.load(); }
+    int64_t GetTasksInProgress() const { return m_tasks_in_progress.load(); }
+    int64_t GetTasksCompleted() const { return m_tasks_completed.load(); }
+    int64_t GetTasksFailed() const { return m_tasks_failed.load(); }
     /// Wait-free (relaxed atomic load): no longer takes m_mutex. See
     /// m_fallback_pending below -- kept in sync with m_tasks_to_dispatch by
     /// every mutating call site (EnqueuFallback / DrainFallbackQueue /
     /// DeleteTaskFromQueue / Run), so it never needs the lock to read.
-    size_t GetTasksQueued() const { return m_fallback_pending.load(std::memory_order_relaxed); }
-    uint64_t GetTasksStolen() const;
+    int64_t GetTasksQueued() const { return m_fallback_pending.load(std::memory_order_relaxed); }
+    int64_t GetTasksStolen() const;
 
 private:
     int GetHardwareThreadsCount() const;
@@ -104,13 +105,13 @@ private:
     /// common case where the fallback queue is empty -- which after Run()
     /// starts is effectively always, since AddTask only falls back when
     /// Workers::SubmitTask() itself reports saturation.
-    std::atomic<size_t> m_fallback_pending{ 0 };
+    std::atomic<int64_t> m_fallback_pending{ 0 };
 
     TaskRegistry<> m_registry;                            ///< Task metadata by ID (lock-free hot path, see TaskRegistry.hpp).
 
-    std::atomic<int>      m_tasks_in_progress{ 0 };        ///< Tasks currently executing.
-    std::atomic<int>      m_tasks_completed{ 0 };          ///< Tasks finished successfully.
-    std::atomic<int>      m_tasks_failed{ 0 };             ///< Tasks failed/aborted.
+    std::atomic<int64_t>      m_tasks_in_progress{ 0 };        ///< Tasks currently executing.
+    std::atomic<int64_t>      m_tasks_completed{ 0 };          ///< Tasks finished successfully.
+    std::atomic<int64_t>      m_tasks_failed{ 0 };             ///< Tasks failed/aborted.
 
     std::atomic<uint64_t> m_next_task_id{ 1 };             ///< Monotonic task ID generator.
 

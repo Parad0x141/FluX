@@ -6,6 +6,8 @@
 #include <memory>
 #include <vector>
 
+#include "Helpers.hpp"
+
 /// Custom Lock-free Chase-Lev work-stealing deque (C. Chase & Y. Lev, 2005).
 /// 
 /// Single-producer (owner), multiple-consumer (thieves).
@@ -34,17 +36,7 @@
 template <typename T>
 class ChaseLevDeque
 {
-    static size_t RoundUpPowerOf2(size_t v)
-    {
-        v--;
-        v |= v >> 1;
-        v |= v >> 2;
-        v |= v >> 4;
-        v |= v >> 8;
-        v |= v >> 16;
-        v |= v >> 32;
-        return v + 1;
-    }
+    
 
 public:
     /// Create deque with given capacity (rounded up to next power of 2).
@@ -77,8 +69,9 @@ public:
         size_t t = m_top.load(std::memory_order_seq_cst);    // must see latest thief steals
 
         // Signed comparison avoids unsigned wraparound when bottom wraps.
-        long size = static_cast<long>(b) - static_cast<long>(t);
-        if (size >= static_cast<long>(m_capacity - 1))
+        // long size = static_cast<long>(b) - static_cast<long>(t); //< Intentionnaly kept as a reminder :)...
+        int64_t size = static_cast<int64_t>(b) - static_cast<int64_t>(t);
+        if (size >= static_cast<int64_t>(m_capacity - 1))
         {
             return false; // Full
         }
@@ -106,7 +99,7 @@ public:
         m_bottom.store(b, std::memory_order_seq_cst);
 
         size_t t = m_top.load(std::memory_order_seq_cst);
-        long size = static_cast<long>(b) - static_cast<long>(t);
+        int64_t size = static_cast<int64_t>(b) - static_cast<int64_t>(t);
 
         if (size < 0)
         {
@@ -161,7 +154,7 @@ public:
         // PopBottom, giving the same visibility the fence-based version relied on.
         size_t b = m_bottom.load(std::memory_order_seq_cst);
 
-        long size = static_cast<long>(b) - static_cast<long>(t);
+        int64_t size = static_cast<int64_t>(b) - static_cast<int64_t>(t);
         if (size <= 0)
             return false; // Empty
 

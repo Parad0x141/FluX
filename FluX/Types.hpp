@@ -5,6 +5,7 @@
 #include <functional>
 #include <thread>
 
+
 /// Scheduling policy for the task queue (not currently used, reserved for future).
 enum class SchedulerMode : uint8_t
 {

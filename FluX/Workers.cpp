@@ -1,6 +1,7 @@
 #include "Workers.hpp"
 #include <iostream>
 
+
 Workers::Workers(int hardware_threads_count, Executor executor)
     : m_hardware_threads_count(hardware_threads_count),
     m_executor(std::move(executor))
@@ -37,7 +38,19 @@ void Workers::WorkerLoop(size_t index)
     Worker& self = *m_workers[index];
     self.id = std::this_thread::get_id();
 
-    while (true) {
+    // Idle backoff counter. Pure yield()-spinning below used to mean an idle
+    // worker burns ~100% of a core indefinitely: yield() only gives up the
+    // current timeslice, it gets rescheduled again almost immediately if
+    // nothing else wants the core, so a tight yield()-loop is still a busy
+    // spin in practice. Fine for a benchmark that submits work immediately
+    // and exits, but the FTXUI dashboard can sit idle at "Pret" for minutes,
+    // so idle workers now spin-yield for a short burst (near-zero latency
+    // for bursty workloads) and fall back to short sleeps once it's clear
+    // there's genuinely nothing to do.
+    int idle_spins = 0;
+
+    while (true)
+    {
         Task* task_ptr = nullptr;
         bool has_task = false;
 
@@ -45,41 +58,69 @@ void Workers::WorkerLoop(size_t index)
         has_task = self.queue.PopBottom(task_ptr);
 
         // 2. If local queue empty, drain external injection queue.
-        if (!has_task) {
+        if (!has_task)
+        {
             DrainInjectQueue(index);
             has_task = self.queue.PopBottom(task_ptr);
         }
 
         // 3. If still no work, attempt to steal from other workers (FIFO).
-        if (!has_task) {
+        if (!has_task) 
+        {
             Task stolen_task;
-            if (TrySteal(index, stolen_task)) {
+            if (TrySteal(index, stolen_task))
+            {
+                idle_spins = 0;
                 try {
-                    if (m_executor) {
+                    if (m_executor) 
+                    {
                         m_executor(std::move(stolen_task));
                     }
-                    else {
+                    else 
+                    {
                         stolen_task.payload();
                     }
                 }
-                catch (const std::exception& e) {
+                catch (const std::exception& e) 
+                {
                     std::cerr << "Worker " << index << ": stolen task threw: " << e.what() << "\n";
                 }
-                catch (...) {
+                catch (...)
+                {
                     std::cerr << "Worker " << index << ": stolen task threw unknown exception\n";
                 }
                 continue;
             }
         }
 
-        if (!has_task) {
+        if (!has_task) 
+        {
             if (self.shutdown.load(std::memory_order_acquire)) return;
-            std::this_thread::yield();
+
+            // First ~1000 idle iterations: pure yield(), 
+            // keeps latency near-zero for workloads where new tasks show up
+            // every few microseconds. Past that, this worker has genuinely
+            // been idle for a while: sleep briefly instead of hammering the
+            // core. 200us caps idle CPU use hard while staying well under
+            // human-perceptible latency for the next task to start.
+            ++idle_spins;
+            if (idle_spins < 1000)
+            {
+                std::this_thread::yield();
+            }
+            else 
+            {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
             continue;
         }
 
-        if (task_ptr) {
-            if (!task_ptr->payload) {
+        idle_spins = 0;
+
+        if (task_ptr) 
+        {
+            if (!task_ptr->payload)
+            {
 #ifdef FLUX_DEBUG_DUPES
                 std::cerr << "[Workers] RELEASE site=local-empty-skip worker=" << index
                     << " task_id=" << task_ptr->task_id
@@ -96,10 +137,12 @@ void Workers::WorkerLoop(size_t index)
             Task task = std::move(*task_ptr);
             self.pool.Release(task_ptr);
 
-            if (m_executor) {
+            if (m_executor) 
+            {
                 m_executor(std::move(task));
             }
-            else {
+            else 
+            {
                 task.payload();
             }
         }
@@ -127,9 +170,9 @@ void Workers::DrainInjectQueue(size_t index)
             }
             ++drained;
         }
-        else 
+        else
         {
-            if (task_ptr) 
+            if (task_ptr)
             {
 #ifdef FLUX_DEBUG_DUPES
                 std::cerr << "[Workers] RELEASE site=inject-invalid worker=" << index
@@ -164,7 +207,8 @@ bool Workers::SubmitTask(Task& task, TaskPriority priority)
     task_ptr->pool_slot_index = slot_index;
 
     bool injected = w.inject_queue.TryPush(task_ptr);
-    if (!injected) {
+    if (!injected) 
+    {
         task = std::move(*task_ptr);
 #ifdef FLUX_DEBUG_DUPES
         std::cerr << "[Workers] RELEASE site=submit-rollback worker=" << idx
@@ -192,7 +236,7 @@ bool Workers::TrySteal(size_t thief_index, Task& out_task)
         {
             if (!task_ptr || !task_ptr->payload)
             {
-                if (task_ptr) 
+                if (task_ptr)
                 {
 #ifdef FLUX_DEBUG_DUPES
                     std::cerr << "[Workers] RELEASE site=steal-empty thief=" << thief_index
@@ -220,7 +264,9 @@ bool Workers::TrySteal(size_t thief_index, Task& out_task)
 size_t Workers::SelectWorker()
 {
     size_t count = m_workers.size();
-    if (count == 0) return 0;
+    if (count == 0)
+        return 0;
+
     size_t idx = m_round_robin_index.fetch_add(1, std::memory_order_relaxed);
     return idx % count;
 }

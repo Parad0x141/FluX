@@ -24,6 +24,9 @@
     <ClCompile Include="Workers.cpp">
       <Filter>Fichiers sources</Filter>
     </ClCompile>
+    <ClCompile Include="FTXUIDashboard.cpp">
+      <Filter>Fichiers sources</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Scheduler.hpp">
@@ -50,5 +53,11 @@
     <ClInclude Include="Helpers.hpp">
       <Filter>Fichiers d%27en-tête</Filter>
     </ClInclude>
+    <ClInclude Include="FTXUIDashboard.hpp">
+      <Filter>Fichiers d%27en-tête</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\vcpkg.json" />
   </ItemGroup>
 </Project>
