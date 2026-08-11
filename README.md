@@ -1,11 +1,14 @@
 # FluX
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
-[![ThreadSanitizer](https://img.shields.io/badge/TSan-tested-success.svg)]()
-[![Throughput](https://img.shields.io/badge/benchmark-3.37M%20tasks%2Fs-orange.svg)]()
-[![Tasks](https://img.shields.io/badge/stress%20test-100M%20tasks-purple.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![64-bit](https://img.shields.io/badge/arch-x86__64-blue.svg)]()
+[![TSan](https://img.shields.io/badge/TSan-tested-success.svg)]()
+[![ASan](https://img.shields.io/badge/ASan-tested-success.svg)]()
+[![UBSan](https://img.shields.io/badge/UBSan-tested-success.svg)]()
+[![Benchmark](https://img.shields.io/badge/benchmark-3.84M%20tasks%2Fs-orange.svg)]()
+[![Stress test](https://img.shields.io/badge/stress-3B%20tasks-purple.svg)]()
 
 > **FluX** — A low-latency C++20 work-stealing task scheduler with lock-free worker queues, lock-free task metadata tracking, and zero-allocation task recycling on steady-state hot paths.
 
@@ -83,6 +86,8 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <atomic>
+#include <cstdint>
 
 int main()
 {
@@ -91,11 +96,11 @@ int main()
     Scheduler scheduler;
     scheduler.Run();  // Start worker threads (hardware_concurrency)
 
-    const int NUM_TASKS = 10000;
-    std::atomic<int> counter{0};
+    const int64_t NUM_TASKS = 10000;
+    std::atomic<int64_t> counter{0};
 
     // Submit tasks
-    for (int i = 0; i < NUM_TASKS; ++i)
+    for (int64_t i = 0; i < NUM_TASKS; ++i)
     {
         Task task;
         task.payload = [&counter]
@@ -106,7 +111,7 @@ int main()
         scheduler.AddTask(std::move(task));
     }
 
-    // Wait for completion
+    // Wait for completion – note that GetTasksCompleted/Failed now return int64_t
     while (scheduler.GetTasksCompleted() + scheduler.GetTasksFailed() < NUM_TASKS)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -278,7 +283,7 @@ Chunk creation occurs only when a new task-ID range is reached and is resolved u
 `Scheduler::ExecuteTask` runs once per task, on whichever worker thread claimed it, so it sits directly on the hot path. It intentionally takes **no lock**:
 
 * `Task` is passed **by value** into `ExecuteTask`, so the copy is exclusively owned by the calling thread — nothing else can observe or race on its `status`/`payload` fields, no synchronization needed.
-* `m_tasks_in_progress`, `m_tasks_completed` and `m_tasks_failed` are `std::atomic<int>`; they're updated with direct `fetch_add`/`fetch_sub`, not read-modify-write under a lock.
+* `m_tasks_in_progress`, `m_tasks_completed` and `m_tasks_failed` are `std::atomic<int64_t>`; they're updated with direct `fetch_add`/`fetch_sub`, not read-modify-write under a lock.
 
 `DrainFallbackQueue()` is called from `ExecuteTask` on every single task completion, so it's on the same hot path. It now checks a relaxed atomic counter (`m_fallback_pending`, kept in sync with the fallback deque's size at every mutation site under `m_mutex`) before deciding whether to take the mutex at all. In steady state — fallback queue empty, which is the common case once `Run()` is up and workers aren't saturated — this is a single relaxed load and a return, no lock acquired. `GetTasksQueued()` uses the same counter and is now also lock-free.
 
@@ -290,22 +295,20 @@ This does **not** change what the mutex protects: `m_tasks_to_dispatch` and the 
 
 ### Latest benchmark
 
-**Hardware:** Intel Core i7-4790K — 4C/8T (Rawr ! I'm a dinosaur !)
-**Tasks:** 100,000,000
+**Hardware:** Intel Core i7-4790K — 4C/8T (Rawr ! I'm a dinosaur ! 🦖)
+**Tasks:** 3,000,000,000
 **Result:** 0 failed tasks
 
-|         Metric          |               Result                |
+|         Metric          |                Result               |
 | ----------------------- | -------------------:                |
-| Tasks                   |      **100,000,000**                |
-| Submit time             |        **29,630 ms**                |
-| Execution time          |            **15 ms**                |
-| Total time              |        **29,646 ms**                |
-| **Measured throughput** | **3,373,136 tasks/sec (3.37M/sec)** |
-| Completed               |      **100,000,000**                |
+| Tasks                   |    **3,000,000,000**                |
+| Submit time             |       **781,119 ms**                |
+| Execution time          |            **12 ms**                |
+| Total time              |       **781,132 ms**                |
+| **Measured throughput** | **3,840,000 tasks/sec (3.84M/sec)** |
+| Completed               |    **3,000,000,000**                |
 | Failed                  |                **0**                |
-| Successful steals       |        **10,973,662**               |
-
-> This benchmark predates the `ExecuteTask`/`DrainFallbackQueue` mutex-removal pass described above. Numbers pending re-run on real hardware; expect submit time to drop further since the per-task lock/unlock pair on the worker side is gone.
+| Successful steals       |      **397,120,105**                |
 
 The benchmark is intentionally dominated by extremely small task submissions. The measured throughput therefore primarily reflects scheduler/submission overhead rather than the computational throughput of the payload itself.
 
@@ -467,7 +470,7 @@ If you notice any discrepancies between the documentation and the current implem
 
 ## License
 
-MIT © 2026 Cyril "Parad0x141" Bouvier
+Copyright (C) 2026 Cyril "Parad0x141" Bouvier
 
 See `LICENSE` for details.
 
