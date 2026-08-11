@@ -86,6 +86,8 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <atomic>
+#include <cstdint>
 
 int main()
 {
@@ -94,11 +96,11 @@ int main()
     Scheduler scheduler;
     scheduler.Run();  // Start worker threads (hardware_concurrency)
 
-    const int NUM_TASKS = 10000;
-    std::atomic<int> counter{0};
+    const int64_t NUM_TASKS = 10000;
+    std::atomic<int64_t> counter{0};
 
     // Submit tasks
-    for (int i = 0; i < NUM_TASKS; ++i)
+    for (int64_t i = 0; i < NUM_TASKS; ++i)
     {
         Task task;
         task.payload = [&counter]
@@ -109,7 +111,7 @@ int main()
         scheduler.AddTask(std::move(task));
     }
 
-    // Wait for completion
+    // Wait for completion – note that GetTasksCompleted/Failed now return int64_t
     while (scheduler.GetTasksCompleted() + scheduler.GetTasksFailed() < NUM_TASKS)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -293,7 +295,7 @@ This does **not** change what the mutex protects: `m_tasks_to_dispatch` and the 
 
 ### Latest benchmark
 
-**Hardware:** Intel Core i7-4790K — 4C/8T (Rawr ! I'm a dinosaur !)
+**Hardware:** Intel Core i7-4790K — 4C/8T (Rawr ! I'm a dinosaur ! 🦖)
 **Tasks:** 3,000,000,000
 **Result:** 0 failed tasks
 
