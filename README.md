@@ -470,7 +470,7 @@ If you notice any discrepancies between the documentation and the current implem
 
 ## License
 
-MIT © 2026 Cyril "Parad0x141" Bouvier
+Copyright (C) 2026 Cyril "Parad0x141" Bouvier
 
 See `LICENSE` for details.
 
