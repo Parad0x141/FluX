@@ -294,21 +294,19 @@ This does **not** change what the mutex protects: `m_tasks_to_dispatch` and the 
 ### Latest benchmark
 
 **Hardware:** Intel Core i7-4790K — 4C/8T (Rawr ! I'm a dinosaur !)
-**Tasks:** 100,000,000
+**Tasks:** 3,000,000,000
 **Result:** 0 failed tasks
 
-|         Metric          |               Result                |
+|         Metric          |                Result               |
 | ----------------------- | -------------------:                |
-| Tasks                   |      **100,000,000**                |
-| Submit time             |        **29,630 ms**                |
-| Execution time          |            **15 ms**                |
-| Total time              |        **29,646 ms**                |
-| **Measured throughput** | **3,373,136 tasks/sec (3.37M/sec)** |
-| Completed               |      **100,000,000**                |
+| Tasks                   |    **3,000,000,000**                |
+| Submit time             |       **781,119 ms**                |
+| Execution time          |            **12 ms**                |
+| Total time              |       **781,132 ms**                |
+| **Measured throughput** | **3,840,000 tasks/sec (3.84M/sec)** |
+| Completed               |    **3,000,000,000**                |
 | Failed                  |                **0**                |
-| Successful steals       |        **10,973,662**               |
-
-> This benchmark predates the `ExecuteTask`/`DrainFallbackQueue` mutex-removal pass described above. Numbers pending re-run on real hardware; expect submit time to drop further since the per-task lock/unlock pair on the worker side is gone.
+| Successful steals       |      **397,120,105**                |
 
 The benchmark is intentionally dominated by extremely small task submissions. The measured throughput therefore primarily reflects scheduler/submission overhead rather than the computational throughput of the payload itself.
 
