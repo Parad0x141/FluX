@@ -73,13 +73,16 @@ enum class TaskStatus : uint8_t
     Failed = 5       ///< Task threw an exception or was aborted.
 };
 
-/// Unit of work submitted to the thread pool. 
+/// Unit of work submitted to the thread pool.
 /// All fields are public for zero-overhead access; invariants are enforced by the scheduler.
-/// Copyable and movable. Copy exists because Scheduler::AddTask stores a full
-/// copy in m_task_registry (including payload for debugging purpose) for later snapshot/lookup, while
-/// the original is moved into the worker pool. Note this means std::function's
-/// own copy cost (possible heap allocation if the capture exceeds its SBO)
-/// applies on every AddTask() call, not just at submission-adjacent moves.
+/// Copyable and movable. Copyable mainly for API convenience (AddTask takes a Task
+/// by value, GetTaskSnapshot()/GetTaskById() return one) -- NOT because the hot path
+/// copies the payload. TaskRegistry::Register only stores priority/start_time/status,
+/// never the std::function itself (see TaskRegistry.hpp), so a submitted task's
+/// payload is moved exactly once, from the caller's Task into the worker's TaskPool
+/// slot (see Workers::SubmitTask). If you do copy a Task with a non-trivial capture
+/// (exceeding std::function's SBO), that copy is on you, not something AddTask does
+/// internally.
 struct Task
 {
     std::thread::id thread_id{};          ///< Reserved for the worker thread executing this task.

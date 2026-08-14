@@ -262,7 +262,6 @@ bool Workers::SubmitTask(Task& task, TaskPriority priority)
     *task_ptr = std::move(task);
     task_ptr->pool_slot_index = slot_index;
 
-    // La seule modification : utiliser inject_queues avec l'index de priorité
     bool injected = w.inject_queues[static_cast<int>(priority)].TryPush(task_ptr);
     if (!injected)
     {

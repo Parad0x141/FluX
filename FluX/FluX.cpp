@@ -29,10 +29,12 @@
 
 using namespace flux;
 
+// Kinda depracated since the dashboard introduction.
+// But still useful for quick-and-dirty testing.
 static void RunConsoleBenchmark(Scheduler& scheduler)
 {
     std::cout << "Scheduler running, adding tasks...\n" << std::flush;
-
+    
     const int64_t NUM_TASKS = 10000;
     auto start = std::chrono::high_resolution_clock::now();
 

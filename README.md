@@ -12,7 +12,7 @@
 
 > **FluX** — A low-overhead C++20 work-stealing task scheduler built around lock-free worker queues, lock-free task metadata tracking, and zero-allocation task recycling on steady-state hot paths.
 
-*This README is subject to a lot of changes along the development.*
+*This README is still evolving along with the project.*
 
 ---
 
@@ -53,7 +53,7 @@
 | **ChaseLevDeque** | Chase-Lev work-stealing                            | Per-worker local queue (owner LIFO, thieves FIFO)         |
 | **TaskPool**      | Sequence/CAS-based concurrent object pool           | Lock-free task object recycling with cross-thread release |
 | **Workers**       | Round-robin submission + rotating victim selection | Thread pool orchestration                                 |
-| **TaskRegistry**  | Segmented atomic registry                          | Lock-free task metadata, status tracking and cancellation |
+| **TaskRegistry**  | Segmented atomic registry                          | Lock-free task metadata, status tracking and abort state transitions |
 | **Scheduler**     | Public API + fallback queue + registry             | High-level task submission, tracking and control          |
 
 > **Note on `MPMCQueue` usage:** the class itself implements Vyukov's full MPMC algorithm and is safe for concurrent producers *and* concurrent consumers. In FluX, each worker's `inject_queue` is written by potentially many external threads (`Scheduler::AddTask` callers, `Workers::SubmitTask`) — genuinely multi-producer — but only ever *read* by that worker's own thread, inside `DrainInjectQueue()`. No other thread calls `TryPop` on it. So in this codebase the queue runs as MPSC in practice, not MPMC; the extra consumer-side concurrency the algorithm supports simply isn't exercised here.
@@ -63,13 +63,16 @@
 ## Features
 
 * **Lock-free worker hot paths** — Worker-local execution, stealing, injection and task recycling avoid scheduler registry locks.
-* **Lock-free task registry** — Segmented metadata storage with atomic status transitions and CAS-based abort state transitions. **Lock-free task execution accounting** — `ExecuteTask` updates in-progress/completed/failed counters via direct atomic RMW; no mutex is taken on the per-task execution path.
+* **Lock-free task registry** — Segmented metadata storage with atomic status transitions and CAS-based abort state transitions.
+* **Lock-free task execution accounting** — `ExecuteTask` updates in-progress/completed/failed counters via direct atomic RMW; no mutex is taken on the per-task execution path.
 * **Work-stealing** — Chase-Lev deque with owner LIFO for locality and thief FIFO for fairness.
 * **Zero-allocation task recycling** — `TaskPool` recycles task objects after pool initialization.
 * **Amortized registry allocation** — Metadata storage is allocated in fixed-size chunks rather than once per task.
-* **Priority support** — `TaskPriority` routing infrastructure is present; priority ordering is not yet enforced.
-* **Task tracking** — Metadata snapshots, queued-task removal, and cooperative `InProgress`/`Claimed` → `Failed` abort transitions. **TSan-tested** — Stress-tested with ThreadSanitizer and dedicated race-window instrumentation.
-* **Debug instrumentation** — `FLUX_DEBUG_DUPES` detects duplicate task completion, pool acquire/release, and slot lifetime violations. **Atomic statistics** — In-progress, completed, failed and stolen-task counters.
+* **Priority support** — Four-level priority routing with priority-aware local execution and work stealing. Strict global priority ordering is not guaranteed.
+* **Task tracking** — Metadata snapshots, queued-task removal, and cooperative `InProgress`/`Claimed` → `Failed` abort transitions.
+* **TSan-tested** — Stress-tested with ThreadSanitizer and dedicated race-window instrumentation.
+* **Debug instrumentation** — `FLUX_DEBUG_DUPES` detects duplicate task completion, pool acquire/release, and slot lifetime violations.
+* **Atomic statistics** — In-progress, completed, failed and stolen-task counters.
 * **Concurrency stress instrumentation** — `FLUX_STRESS_STEAL_WINDOW` widens selected Chase-Lev race windows to exercise difficult owner/thief interleavings.
 * **Lifecycle-safe shutdown** — Worker ownership is moved out under the scheduler mutex before blocking worker joins.
 
@@ -91,7 +94,7 @@ int main()
 {
     std::cout << "=== FluX Basic Example ===\n\n";
 
-    Scheduler scheduler;
+    flux::Scheduler scheduler;
     scheduler.Run();  // Start worker threads (hardware_concurrency)
 
     const int64_t NUM_TASKS = 10000;
@@ -100,12 +103,12 @@ int main()
     // Submit tasks
     for (int64_t i = 0; i < NUM_TASKS; ++i)
     {
-        Task task;
+        flux::Task task;
         task.payload = [&counter]
         {
             counter.fetch_add(1, std::memory_order_relaxed);
         };
-        task.priority = TaskPriority::Normal;
+        task.priority = flux::TaskPriority::Normal;
         scheduler.AddTask(std::move(task));
     }
 
@@ -134,12 +137,25 @@ Optional preprocessor definitions:
 * `FLUX_DEBUG_DUPES=1` — Enable duplicate completion/acquire/release detection.
 * `FLUX_STRESS_STEAL_WINDOW=1` — Widen selected Chase-Lev race windows for stress testing.
 
-Command-line compile (FluX is not header-only: `Scheduler.cpp` and `Workers.cpp`
+Command-line compile (FluX is not header-only: `Scheduler.cpp`, `Workers.cpp`, and `FTXUIDashboard.cpp`
 must be compiled and linked alongside `FluX.cpp`, or you'll get `undefined
 reference` errors at link time):
 
+**Interactive dashboard (default, requires FTXUI via vcpkg):**
+
 ```bash
-g++ -std=c++20 -O3 -I FluX FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp -o flux_benchmark
+g++ -std=c++20 -O3 -I FluX -I vcpkg_installed/x64-windows/include \
+    FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp FluX/FTXUIDashboard.cpp \
+    -o flux_dashboard -lftxui
+./flux_dashboard
+```
+
+**Console benchmark only (no FTXUI dependency):**
+
+```bash
+g++ -std=c++20 -O3 -I FluX \
+    FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp \
+    -o flux_benchmark -DUSE_FTXUI_DASHBOARD=0
 ./flux_benchmark
 ```
 
@@ -155,7 +171,7 @@ g++ -std=c++20 -O3 -I FluX FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp -o 
 | `AddTask(Task)`           | Submit a task and return a unique `task_id` (`0` on failure).                          |
 | `GetTaskSnapshot(id)`     | Return immutable task metadata without retaining/copying the payload.                  |
 | `GetTaskById(id)`         | Metadata lookup retained for API compatibility; payload is not stored by the registry. |
-| `DeleteTaskFromQueue(id)` | Cancel a task still waiting in the scheduler fallback queue.                           |
+| `DeleteTaskFromQueue(id)` | Remove a task still waiting in the scheduler fallback queue. |
 | `AbortTaskInProgress(id)` | Atomically mark an `InProgress`/`Claimed` task as `Failed`; does not interrupt the payload. |
 | `GetTasksInProgress()`    | Atomic count of currently executing tasks.                                             |
 | `GetTasksCompleted()`     | Atomic count of successfully completed tasks.                                          |
@@ -193,7 +209,7 @@ Task task
 
 ```cpp
 // Custom executor injection
-Workers workers(thread_count, [](Task&& t)
+flux::Workers workers(thread_count, [](flux::Task&& t)
 {
     /* custom execution */
 });
@@ -237,7 +253,7 @@ Each entry stores only:
 * `start_time`
 * `in_use`
 
-The status is atomic and acts as the publication mechanism for the associated metadata.
+The entry uses atomic state publication so readers can observe a fully initialized metadata record without taking a mutex.
 
 ### Why metadata-only?
 
@@ -433,11 +449,9 @@ Sanitizer runs and stress tests provide dynamic evidence over the executions
 they cover; they are not a formal proof that every possible concurrent
 execution is correct.
 
-FluX has been stress-tested under ThreadSanitizer with millions of task operations and dedicated race-window instrumentation.
-
-> ThreadSanitizer testing provides strong dynamic coverage, but it is not a formal proof that every possible execution is race-free.
-
 ---
+
+## Memory Model
 
 | Operation | Ordering | Purpose |
 |---|---|---|
@@ -595,7 +609,6 @@ experimental.
 * The `TaskRegistry` is append-only for the lifetime of the `Scheduler`; historical metadata is not currently reclaimed or evicted.
 * The registry has a configured maximum task-ID range. IDs beyond that range are intentionally ignored by registry operations.
 * The public API is experimental and may change before a stable release.
----
 
 ## Documentation Notice
 
@@ -604,6 +617,7 @@ This documentation was initially generated with the assistance of Claude AI and 
 While every effort has been made to keep the documentation accurate, it may become outdated as the project evolves (I'm lazy, and this is just some "toy code" to keep me busy anyway). Refactoring, implementation changes, and architectural changes may introduce documentation drift.
 
 The source code remains the authoritative reference for the current implementation. Every effort is made to keep the README up to date, but ultimately, I'm only human.
+
 ---
 
 ## License
@@ -620,5 +634,5 @@ See `LICENSE` for details.
 * **Dmitry Vyukov** — Bounded MPMC queue algorithm
 * **C. Chase & Y. Lev** — Work-stealing deque
 * **Lê et al.** — Work-stealing deque memory-model analysis and fence-equivalence work
-* **Arthur Sonzogni** — FTXUI Linux/Win, used for the interactive terminal dashboard
+* **Arthur Sonzogni** — FTXUI, used for the interactive terminal dashboard
 * **ThreadSanitizer team** — Dynamic race detection and stress testing
