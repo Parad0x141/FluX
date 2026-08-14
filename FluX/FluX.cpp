@@ -27,6 +27,7 @@
 #include "Helpers.hpp"
 #include "FTXUIDashboard.hpp"
 
+using namespace flux;
 
 static void RunConsoleBenchmark(Scheduler& scheduler)
 {

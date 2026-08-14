@@ -25,8 +25,9 @@
 #include <thread>
 #include <atomic>
 
-class Scheduler;
+namespace flux {
 
+class Scheduler;
 /// Quick and dirty Interactive terminal dashboard (FTXUI) for FluX.
 ///
 /// Lets the user type a task count, launch a benchmark run against the
@@ -96,3 +97,5 @@ private:
 
     std::thread m_benchmark_thread; ///< Joined in Run()/dtor before returning / on next launch.
 };
+
+} // namespace flux

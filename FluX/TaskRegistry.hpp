@@ -27,6 +27,7 @@
 
 #include "Types.hpp"
 
+namespace flux {
 
 /// Metadata-only registry of tasks, indexed by task_id, built for
 /// observability (status/timing/priority queries, post-mortem debugging)
@@ -193,3 +194,5 @@ private:
 
     std::array<std::atomic<Chunk*>, MaxChunks> m_chunks;
 };
+
+} // namespace flux

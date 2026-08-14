@@ -33,6 +33,7 @@
 #include "Workers.hpp"
 #include "TaskRegistry.hpp"
 
+namespace flux {
 
  /// High-level task scheduler with work-stealing thread pool.
  /// 
@@ -171,3 +172,5 @@ private:
     std::unique_ptr<Workers> m_workers;                  ///< Worker thread pool (created on Run).
     mutable std::mutex m_mutex;                          ///< Protects m_tasks_to_dispatch, m_workers pointer swaps.
 };
+
+} // namespace flux

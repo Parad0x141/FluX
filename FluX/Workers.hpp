@@ -26,11 +26,13 @@
 #include <memory>
 #include <mutex>
 #include <array>
+
 #include "Types.hpp"
 #include "ChaseLevDeque.hpp"
 #include "MPMCQueue.hpp"
 #include "TaskPool.hpp"
 
+namespace flux {
 
 /// Per-worker state: owns a Chase-Lev deque, injection queue, and task pool.
 /// 
@@ -134,10 +136,18 @@ private:
 
     int                                  m_hardware_threads_count; ///< Number of worker threads.
     std::vector<std::unique_ptr<Worker>> m_workers;                ///< Worker states (owned).
+    // alignas(64) pads each atomic to its own cache line to prevent false sharing
+    // between round-robin, steal-start, and steal-count accessed by different threads.
+    // MSVC C4324 warning (structure padded due to alignment) is expected and desired.
+    #pragma warning(push)
+    #pragma warning(disable: 4324)
     alignas(64) std::atomic<size_t>      m_round_robin_index{0};   ///< Round-robin counter (cache-line aligned).
     alignas(64) std::atomic<size_t>      m_steal_start{0};         ///< Steal victim start index (cache-line aligned).
     alignas(64) std::atomic<int64_t>     steal_count{ 0 };         ///< Total successful steals.
+    #pragma warning(pop)
 
     Executor m_executor;                                           ///< Task execution callback.
 
 };
+
+} // namespace flux

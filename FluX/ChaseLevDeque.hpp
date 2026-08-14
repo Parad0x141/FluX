@@ -28,6 +28,8 @@
 
 #include "Helpers.hpp"
 
+namespace flux {
+
 /// Custom Lock-free Chase-Lev work-stealing deque (C. Chase & Y. Lev, 2005).
 /// 
 /// Single-producer (owner), multiple-consumer (thieves).
@@ -231,6 +233,15 @@ private:
     const size_t m_capacity;                    ///< Power-of-2 capacity.
     const size_t m_mask;                        ///< Bitmask for modulo (capacity - 1).
     std::vector<std::atomic<T*>> m_slots;       ///< Circular buffer of task pointers.
+
+    // alignas(64) pads each atomic to its own cache line to prevent false sharing
+    // between m_top (thief CAS) and m_bottom (owner store). MSVC C4324 warning
+    // (structure padded due to alignment) is expected and desired here.
+    #pragma warning(push)
+    #pragma warning(disable: 4324)
     alignas(64) std::atomic<size_t> m_top;      ///< Index of oldest element (thief reads, owner CASes).
     alignas(64) std::atomic<size_t> m_bottom;   ///< Index one past newest element (owner reads/writes).
+    #pragma warning(pop)
 };
+
+} // namespace flux

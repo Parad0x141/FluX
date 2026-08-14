@@ -24,11 +24,14 @@
 #include <cstdint>
 #include <memory>
 
+#include "Helpers.hpp"
+
 #ifdef FLUX_DEBUG_DUPES
 #include <thread>
 #include <iostream>
 #endif
 
+namespace flux {
 
 /// Lock-free object pool for fixed-size objects (e.g., Task).
 /// 
@@ -56,17 +59,6 @@
 template <typename T, size_t Capacity = 4096>
 class TaskPool
 {
-    static size_t RoundUpPowerOf2(size_t v)
-    {
-        v--;
-        v |= v >> 1;
-        v |= v >> 2;
-        v |= v >> 4;
-        v |= v >> 8;
-        v |= v >> 16;
-        v |= v >> 32;
-        return v + 1;
-    }
 
     struct Slot
     {
@@ -115,18 +107,22 @@ public:
         Slot* slot;
         size_t pos = m_enqueue_pos.load(std::memory_order_relaxed);
 
-        for (;;) {
+        for (;;) 
+        {
             slot = &m_slots[pos & m_mask];
             uint64_t seq = slot->sequence.load(std::memory_order_acquire);
             int64_t diff = static_cast<int64_t>(seq) - static_cast<int64_t>(pos);
-            if (diff == 0) {
+            if (diff == 0) 
+            {
                 if (m_enqueue_pos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
                     break; // Claimed 'pos'; slot is ours.
             }
-            else if (diff < 0) {
+            else if (diff < 0)
+            {
                 return nullptr; // Pool genuinely full. No ticket was consumed: nothing to roll back.
             }
-            else {
+            else 
+            {
                 pos = m_enqueue_pos.load(std::memory_order_relaxed);
             }
         }
@@ -135,7 +131,8 @@ public:
 
 #ifdef FLUX_DEBUG_DUPES
         bool was_in_use = slot->in_use.exchange(true, std::memory_order_acq_rel);
-        if (was_in_use) {
+        if (was_in_use)
+        {
             std::cerr << "[TaskPool] CORRUPTION: Acquire() returned slot " << index
                 << " (pos=" << pos << ") that is still in_use!"
                 << " thread=" << std::this_thread::get_id()
@@ -183,7 +180,8 @@ public:
         // slot always logs full context, even though the sequence guard will also
         // (correctly) no-op the actual pool state change.
         bool was_in_use = slot->in_use.exchange(false, std::memory_order_acq_rel);
-        if (!was_in_use) {
+        if (!was_in_use)
+        {
             std::cerr << "[TaskPool] CORRUPTION: Release() on slot " << index
                 << " that was NOT marked in_use (this is call #"
                 << (slot->release_count.load() + 1) << " to Release() on this slot)!"
@@ -212,7 +210,8 @@ public:
         for (;;)
         {
             bool in_use = ((seq - index - 1) % m_capacity) == 0;
-            if (!in_use) {
+            if (!in_use) 
+            {
 #ifdef FLUX_DEBUG_DUPES
                 std::cerr << "[TaskPool] Release() on already-released slot " << index
                     << " (CAS guard caught it, pool state unaffected) thread="
@@ -256,6 +255,14 @@ private:
     size_t m_capacity;                   ///< Power-of-2 capacity.
     size_t m_mask;                       ///< Bitmask for modulo (capacity - 1).
     std::unique_ptr<Slot[]> m_slots;     ///< Slot array.
+    // alignas(64) pads each atomic to its own cache line to prevent false sharing
+    // between m_enqueue_pos (producer) and m_dequeue_pos (consumer). MSVC C4324
+    // warning (structure padded due to alignment) is expected and desired here.
+    #pragma warning(push)
+    #pragma warning(disable: 4324)
     alignas(64) std::atomic<size_t> m_enqueue_pos{ 0 };  ///< Acquire position (cache-line aligned).
     alignas(64) std::atomic<size_t> m_dequeue_pos{ 0 };  ///< Release position (cache-line aligned).
+    #pragma warning(pop)
 };
+
+} // namespace flux

@@ -25,6 +25,9 @@
 #include <memory>
 #include <utility>
 
+#include "Helpers.hpp"
+
+namespace flux {
 
 /// Lock-free MPMC (Multiple-Producer Multiple-Consumer) bounded queue.
 /// 
@@ -40,17 +43,6 @@
 template <typename T, size_t Capacity = 8192>
 class MPMCQueue
 {
-	static size_t RoundUpPowerOf2(size_t v)
-	{
-		v--;
-		v |= v >> 1;
-		v |= v >> 2;
-		v |= v >> 4;
-		v |= v >> 8;
-		v |= v >> 16;
-		v |= v >> 32;
-		return v + 1;
-	}
 
 	struct Slot
 	{
@@ -183,6 +175,14 @@ private:
 	size_t m_capacity;                   ///< Power-of-2 capacity.
 	size_t m_mask;                       ///< Bitmask for modulo (capacity - 1).
 	std::unique_ptr<Slot[]> m_slots;     ///< Ring buffer of slots.
+	// alignas(64) pads each atomic to its own cache line to prevent false sharing
+	// between m_enqueue_pos (producer) and m_dequeue_pos (consumer). MSVC C4324
+	// warning (structure padded due to alignment) is expected and desired here.
+	#pragma warning(push)
+	#pragma warning(disable: 4324)
 	alignas(64) std::atomic<size_t> m_enqueue_pos{ 0 };  ///< Producer position (cache-line aligned).
 	alignas(64) std::atomic<size_t> m_dequeue_pos{ 0 };  ///< Consumer position (cache-line aligned).
+	#pragma warning(pop)
 };
+
+} // namespace flux

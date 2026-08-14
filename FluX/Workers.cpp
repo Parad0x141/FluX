@@ -20,6 +20,7 @@
 #include "Workers.hpp"
 #include <iostream>
 
+using namespace flux;
 
 Workers::Workers(int hardware_threads_count, Executor executor)
     : m_hardware_threads_count(hardware_threads_count),

@@ -22,7 +22,7 @@
 #include <cstdint>
 #include <string>
 
-
+namespace flux {
 /// <summary>
 ///  Does this need some explantions ?
 /// </summary>
@@ -56,3 +56,5 @@ static std::string FormatWithCommas(uint64_t value)
     }
     return s;
 }
+
+} // namespace flux

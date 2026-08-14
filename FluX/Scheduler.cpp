@@ -23,6 +23,8 @@
 #include <iostream>
 #endif
 
+using namespace flux;
+
 PriorityStatsSnapshot Scheduler::GetPriorityStats(TaskPriority p) const
 {
     const auto& stats = m_priority_stats[static_cast<size_t>(p)];

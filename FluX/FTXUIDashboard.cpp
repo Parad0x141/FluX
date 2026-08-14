@@ -33,6 +33,7 @@
 #include "Scheduler.hpp"
 #include "Types.hpp"
 
+using namespace flux;
 
 FTXUIDashboard::FTXUIDashboard(Scheduler& scheduler)
     : m_scheduler(scheduler)

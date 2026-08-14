@@ -24,6 +24,8 @@
 #include <functional>
 #include <thread>
 
+namespace flux {
+
 
 /// Scheduling policy for the task queue (not currently used, reserved for future).
 enum class SchedulerMode : uint8_t
@@ -106,3 +108,5 @@ struct Task
     /// Empty payload is treated as a no-op (skipped with warning).
     std::function<void()> payload;
 };
+
+} // namespace flux
