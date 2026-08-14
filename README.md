@@ -63,13 +63,16 @@
 ## Features
 
 * **Lock-free worker hot paths** — Worker-local execution, stealing, injection and task recycling avoid scheduler registry locks.
-* **Lock-free task registry** — Segmented metadata storage with atomic status transitions and CAS-based abort state transitions. **Lock-free task execution accounting** — `ExecuteTask` updates in-progress/completed/failed counters via direct atomic RMW; no mutex is taken on the per-task execution path.
+* **Lock-free task registry** — Segmented metadata storage with atomic status transitions and CAS-based abort state transitions.
+* **Lock-free task execution accounting** — `ExecuteTask` updates in-progress/completed/failed counters via direct atomic RMW; no mutex is taken on the per-task execution path.
 * **Work-stealing** — Chase-Lev deque with owner LIFO for locality and thief FIFO for fairness.
 * **Zero-allocation task recycling** — `TaskPool` recycles task objects after pool initialization.
 * **Amortized registry allocation** — Metadata storage is allocated in fixed-size chunks rather than once per task.
 * **Priority support** — `TaskPriority` routing infrastructure is present; priority ordering is not yet enforced.
-* **Task tracking** — Metadata snapshots, queued-task removal, and cooperative `InProgress`/`Claimed` → `Failed` abort transitions. **TSan-tested** — Stress-tested with ThreadSanitizer and dedicated race-window instrumentation.
-* **Debug instrumentation** — `FLUX_DEBUG_DUPES` detects duplicate task completion, pool acquire/release, and slot lifetime violations. **Atomic statistics** — In-progress, completed, failed and stolen-task counters.
+* **Task tracking** — Metadata snapshots, queued-task removal, and cooperative `InProgress`/`Claimed` → `Failed` abort transitions.
+* **TSan-tested** — Stress-tested with ThreadSanitizer and dedicated race-window instrumentation.
+* **Debug instrumentation** — `FLUX_DEBUG_DUPES` detects duplicate task completion, pool acquire/release, and slot lifetime violations.
+* **Atomic statistics** — In-progress, completed, failed and stolen-task counters.
 * **Concurrency stress instrumentation** — `FLUX_STRESS_STEAL_WINDOW` widens selected Chase-Lev race windows to exercise difficult owner/thief interleavings.
 * **Lifecycle-safe shutdown** — Worker ownership is moved out under the scheduler mutex before blocking worker joins.
 
@@ -86,6 +89,8 @@
 #include <thread>
 #include <atomic>
 #include <cstdint>
+
+using namespace flux; // everything (Scheduler, Task, TaskPriority...) lives in namespace flux
 
 int main()
 {
@@ -136,7 +141,24 @@ Optional preprocessor definitions:
 
 Command-line compile (FluX is not header-only: `Scheduler.cpp` and `Workers.cpp`
 must be compiled and linked alongside `FluX.cpp`, or you'll get `undefined
-reference` errors at link time):
+reference` errors at link time).
+
+`main()` defaults to `USE_FTXUI_DASHBOARD = true` (see `FluX.cpp`), which pulls
+in `FTXUIDashboard.cpp` and the FTXUI libraries. Build accordingly, or flip
+that flag to `false` in `FluX.cpp` and use the shorter command below.
+
+With the interactive dashboard (default, requires FTXUI installed — e.g. via
+vcpkg — and its include/lib paths adjusted for your setup):
+
+```bash
+g++ -std=c++20 -O3 -I FluX \
+    FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp FluX/FTXUIDashboard.cpp \
+    -lftxui-component -lftxui-dom -lftxui-screen \
+    -o flux_benchmark
+./flux_benchmark
+```
+
+Without the dashboard (`USE_FTXUI_DASHBOARD = false` in `FluX.cpp`, console benchmark only, no FTXUI dependency):
 
 ```bash
 g++ -std=c++20 -O3 -I FluX FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp -o flux_benchmark
@@ -421,11 +443,15 @@ clang++ -std=c++20 \
     -fsanitize=thread \
     -O1 -g \
     -I FluX \
-    FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp \
+    FluX/FluX.cpp FluX/Scheduler.cpp FluX/Workers.cpp FluX/FTXUIDashboard.cpp \
+    -lftxui-component -lftxui-dom -lftxui-screen \
     -o flux_tsan
 
 ./flux_tsan
 ```
+
+(Drop `FTXUIDashboard.cpp` and the `-lftxui-*` flags if `USE_FTXUI_DASHBOARD`
+is set to `false` in `FluX.cpp`.)
 Additional validation has also been performed with AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
