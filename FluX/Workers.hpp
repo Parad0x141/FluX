@@ -34,120 +34,137 @@
 
 namespace flux {
 
-/// Per-worker state: owns a Chase-Lev deque, injection queue, and task pool.
-/// 
-/// - queue: Owner-only work-stealing deque (LIFO push/pop, FIFO steal).
-/// - inject_queue: MPMC queue for external task submissions (Scheduler -> Worker).
-/// - pool: Object pool for Task allocation (avoids heap allocation on hot path).
-/// - mtx: Mutex for future extensibility (currently unused in hot path).
-/// - shutdown: Atomic flag for graceful worker termination.
-/// Per-worker state: owns a work-stealing deque, injection queues, and task pool.
-/// 
-/// - high_queue / normal_queue: Owner-only work-stealing deques for high and normal priorities.
-///   Owner pops from high_queue first (LIFO), then normal_queue.
-///   Thieves steal from high_queue first, then normal_queue (FIFO).
-/// - inject_queues: Array of MPMC queues indexed by TaskPriority for external submissions.
-/// - pool: Object pool for Task allocation (avoids heap allocation on hot path).
-/// - shutdown: Atomic flag for graceful worker termination.
-struct Worker
-{
+    /// Per-worker state: owns a Chase-Lev deque, injection queue, and task pool.
+    /// 
+    /// - queue: Owner-only work-stealing deque (LIFO push/pop, FIFO steal).
+    /// - inject_queue: MPMC queue for external task submissions (Scheduler -> Worker).
+    /// - pool: Object pool for Task allocation (avoids heap allocation on hot path).
+    /// - mtx: Mutex for future extensibility (currently unused in hot path).
+    /// - shutdown: Atomic flag for graceful worker termination.
+    /// Per-worker state: owns a work-stealing deque, injection queues, and task pool.
+    /// 
+    /// - high_queue / normal_queue: Owner-only work-stealing deques for high and normal priorities.
+    ///   Owner pops from high_queue first (LIFO), then normal_queue.
+    ///   Thieves steal from high_queue first, then normal_queue (FIFO).
+    /// - inject_queues: Array of MPMC queues indexed by TaskPriority for external submissions.
+    /// - pool: Object pool for Task allocation (avoids heap allocation on hot path).
+    /// - shutdown: Atomic flag for graceful worker termination.
+    struct Worker
+    {
 #ifdef FLUX_STRESS_STEAL_WINDOW
-    Worker() : high_queue(4096), normal_queue(4096) {}
+        Worker() : high_queue(4096), normal_queue(4096) {}
 #else
-    Worker() : high_queue(65536), normal_queue(65536) {}
+        Worker() : high_queue(65536), normal_queue(65536) {}
 #endif
 
-    std::thread::id id;
-    std::thread thread;
+        std::thread::id id;
+        std::thread thread;
 
-    ChaseLevDeque<Task> high_queue;
-    ChaseLevDeque<Task> normal_queue;
+        ChaseLevDeque<Task> high_queue;
+        ChaseLevDeque<Task> normal_queue;
 
-    std::array<MPMCQueue<Task*, 4096>, 4> inject_queues;
+        std::array<MPMCQueue<Task*, 4096>, 4> inject_queues;
 
-    TaskPool<Task, 4096> pool;
-    std::atomic<bool> shutdown{ false };
+        TaskPool<Task, 4096> pool;
+        std::atomic<bool> shutdown{ false };
 
-    std::atomic<uint64_t> requeue_stall_hits{ 0 };
-    std::atomic<uint64_t> requeue_stall_spins{ 0 };
-};
+        std::atomic<uint64_t> requeue_stall_hits{ 0 };
+        std::atomic<uint64_t> requeue_stall_spins{ 0 };
 
-struct RequeueStallStats { uint64_t hits = 0; uint64_t spins = 0; };
+        /// Cumulative time (ns) this worker has spent inside the executor
+        /// callback (local task execution AND stolen task execution), since the
+        /// worker thread started. Monotonically increasing, never reset.
+        /// Callers (e.g. FTXUIDashboard) compute instantaneous utilization by
+        /// diffing two samples of this against the wall-clock time elapsed
+        /// between the samples -- see ScopedBusyTimer in Workers.cpp for where
+        /// this gets updated.
+        std::atomic<uint64_t> busy_ns{ 0 };
+    };
 
-
-/// Manages a fixed set of worker threads with work-stealing.
-/// 
-/// External threads submit tasks via SubmitTask() (round-robin to workers).
-/// Workers execute local tasks (LIFO), drain injection queue, then steal (FIFO).
-/// 
-/// Thread-safe: SubmitTask/TrySteal called concurrently from multiple threads.
-/// WorkerLoop runs on dedicated thread per worker.
-class Workers
-{
-public:
-    using Executor = std::function<void(Task&&)>;  ///< Task execution callback (Scheduler::ExecuteTask).
-
-    /// Create and start worker threads.
-    /// @param hardware_threads_count Number of workers (typically hardware_concurrency).
-    /// @param executor Callback to execute tasks (captures Scheduler for stats).
-    explicit Workers(int hardware_threads_count, Executor executor);
-    ~Workers();
-
-    /// Submit a task from external thread (e.g., Scheduler::AddTask).
-    /// Round-robin selects target worker, acquires slot from its pool, pushes to inject_queue.
-    /// @param priority RESERVED for future priority-aware worker/queue selection
-    /// (e.g. routing High-priority tasks to a dedicated queue or bypassing
-    /// round-robin). Currently unused routing is plain round-robin
-    /// regardless of task.priority.
-    /// @return true if enqueued, false if worker's pool/inject_queue full.
-    bool SubmitTask(Task& task, TaskPriority priority);
-    /// Attempt to steal a task from another worker (called by thief worker).
-    /// @param thief_index Index of stealing worker.
-    /// @param out_task Receives stolen task on success.
-    /// @return true if steal succeeded.
-    bool TrySteal(size_t thief_index, Task& out_task);
-
-    /// Total queued tasks for a worker (local deque + injection queue).
-    size_t GetQueueSize(size_t worker_index) const;
-
-    /// Check if worker has no pending work (both queues empty).
-    bool IsIdle(size_t worker_index) const;
-
-    /// Total successful steals across all workers.
-    int64_t GetStealCount() const noexcept { return steal_count.load(std::memory_order_relaxed); }
-
-    RequeueStallStats GetRequeueStallStats() const;
+    struct RequeueStallStats { uint64_t hits = 0; uint64_t spins = 0; };
 
 
-private:
-    /// Main worker loop: execute local tasks, drain injections, steal, yield.
-    void WorkerLoop(size_t index);
+    /// Manages a fixed set of worker threads with work-stealing.
+    /// 
+    /// External threads submit tasks via SubmitTask() (round-robin to workers).
+    /// Workers execute local tasks (LIFO), drain injection queue, then steal (FIFO).
+    /// 
+    /// Thread-safe: SubmitTask/TrySteal called concurrently from multiple threads.
+    /// WorkerLoop runs on dedicated thread per worker.
+    class Workers
+    {
+    public:
+        using Executor = std::function<void(Task&&)>;  ///< Task execution callback (Scheduler::ExecuteTask).
 
-    /// Move tasks from inject_queue to local Chase-Lev deque.
-    void DrainInjectQueue(size_t index);
+        /// Create and start worker threads.
+        /// @param hardware_threads_count Number of workers (typically hardware_concurrency).
+        /// @param executor Callback to execute tasks (captures Scheduler for stats).
+        explicit Workers(int hardware_threads_count, Executor executor);
+        ~Workers();
 
-    /// Select next worker for submission (round-robin).
-    size_t SelectWorker();
+        /// Submit a task from external thread (e.g., Scheduler::AddTask).
+        /// Round-robin selects target worker, acquires slot from its pool, pushes to inject_queue.
+        /// @param priority RESERVED for future priority-aware worker/queue selection
+        /// (e.g. routing High-priority tasks to a dedicated queue or bypassing
+        /// round-robin). Currently unused routing is plain round-robin
+        /// regardless of task.priority.
+        /// @return true if enqueued, false if worker's pool/inject_queue full.
+        bool SubmitTask(Task& task, TaskPriority priority);
+        /// Attempt to steal a task from another worker (called by thief worker).
+        /// @param thief_index Index of stealing worker.
+        /// @param out_task Receives stolen task on success.
+        /// @return true if steal succeeded.
+        bool TrySteal(size_t thief_index, Task& out_task);
 
-    /// Try steal from specific victim worker.
-    /// Was meant for debugging, dead code finally not impl.
-    bool TryStealFromVictim(size_t thief_index, size_t victim_index, Task& out_task);
+        /// Total queued tasks for a worker (local deque + injection queue).
+        size_t GetQueueSize(size_t worker_index) const;
+
+        /// Check if worker has no pending work (both queues empty).
+        bool IsIdle(size_t worker_index) const;
+
+        /// Total successful steals across all workers.
+        int64_t GetStealCount() const noexcept { return steal_count.load(std::memory_order_relaxed); }
+
+        RequeueStallStats GetRequeueStallStats() const;
+
+        /// Number of worker threads managed (== hardware_threads_count passed
+        /// to the constructor). Fixed for the lifetime of this Workers instance.
+        size_t GetWorkerCount() const noexcept { return m_workers.size(); }
+
+        /// Cumulative busy time (ns) for one worker since it started -- see
+        /// Worker::busy_ns. Returns 0 for an out-of-range index. Wait-free
+        /// (single relaxed atomic load), safe to call every render tick.
+        uint64_t GetBusyNs(size_t worker_index) const noexcept;
+
+    private:
+        /// Main worker loop: execute local tasks, drain injections, steal, yield.
+        void WorkerLoop(size_t index);
+
+        /// Move tasks from inject_queue to local Chase-Lev deque.
+        void DrainInjectQueue(size_t index);
+
+        /// Select next worker for submission (round-robin).
+        size_t SelectWorker();
+
+        /// Try steal from specific victim worker.
+        /// Was meant for debugging, dead code finally not impl.
+        bool TryStealFromVictim(size_t thief_index, size_t victim_index, Task& out_task);
 
 
-    int                                  m_hardware_threads_count; ///< Number of worker threads.
-    std::vector<std::unique_ptr<Worker>> m_workers;                ///< Worker states (owned).
-    // alignas(64) pads each atomic to its own cache line to prevent false sharing
-    // between round-robin, steal-start, and steal-count accessed by different threads.
-    // MSVC C4324 warning (structure padded due to alignment) is expected and desired.
-    #pragma warning(push)
-    #pragma warning(disable: 4324)
-    alignas(64) std::atomic<size_t>      m_round_robin_index{0};   ///< Round-robin counter (cache-line aligned).
-    alignas(64) std::atomic<size_t>      m_steal_start{0};         ///< Steal victim start index (cache-line aligned).
-    alignas(64) std::atomic<int64_t>     steal_count{ 0 };         ///< Total successful steals.
-    #pragma warning(pop)
+        int                                  m_hardware_threads_count; ///< Number of worker threads.
+        std::vector<std::unique_ptr<Worker>> m_workers;                ///< Worker states (owned).
+        // alignas(64) pads each atomic to its own cache line to prevent false sharing
+        // between round-robin, steal-start, and steal-count accessed by different threads.
+        // MSVC C4324 warning (structure padded due to alignment) is expected and desired.
+#pragma warning(push)
+#pragma warning(disable: 4324)
+        alignas(64) std::atomic<size_t>      m_round_robin_index{ 0 };   ///< Round-robin counter (cache-line aligned).
+        alignas(64) std::atomic<size_t>      m_steal_start{ 0 };         ///< Steal victim start index (cache-line aligned).
+        alignas(64) std::atomic<int64_t>     steal_count{ 0 };         ///< Total successful steals.
+#pragma warning(pop)
 
-    Executor m_executor;                                           ///< Task execution callback.
+        Executor m_executor;                                           ///< Task execution callback.
 
-};
+    };
 
 } // namespace flux

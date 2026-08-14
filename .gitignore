@@ -366,3 +366,4 @@ FodyWeavers.xsd
 /flux_benchmark
 /flux_benchmark_native
 /vcpkg_installed
+/FluX/flux_stats.txt

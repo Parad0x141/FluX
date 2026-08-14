@@ -22,6 +22,35 @@
 
 using namespace flux;
 
+namespace {
+
+    /// RAII timer that adds elapsed wall time to a worker's busy_ns counter on
+    /// destruction. Used to bracket executor calls in WorkerLoop -- destructor
+    /// (not an explicit end-of-block add) matters here specifically for the
+    /// LOCAL task path below, which has no try/catch around m_executor: if the
+    /// executor throws, this still fires during stack unwinding, so busy_ns
+    /// stays accurate even on the exception path instead of silently
+    /// under-counting that slice of time.
+    struct ScopedBusyTimer
+    {
+        explicit ScopedBusyTimer(std::atomic<uint64_t>& counter) : m_counter(counter) {}
+        ~ScopedBusyTimer()
+        {
+            auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - m_start).count();
+            m_counter.fetch_add(static_cast<uint64_t>(elapsed), std::memory_order_relaxed);
+        }
+
+        ScopedBusyTimer(const ScopedBusyTimer&) = delete;
+        ScopedBusyTimer& operator=(const ScopedBusyTimer&) = delete;
+
+    private:
+        std::atomic<uint64_t>& m_counter;
+        std::chrono::steady_clock::time_point m_start = std::chrono::steady_clock::now();
+    };
+
+} // namespace
+
 Workers::Workers(int hardware_threads_count, Executor executor)
     : m_hardware_threads_count(hardware_threads_count),
     m_executor(std::move(executor))
@@ -85,6 +114,7 @@ void Workers::WorkerLoop(size_t index)
             if (TrySteal(index, stolen_task))
             {
                 idle_spins = 0;
+                ScopedBusyTimer busy_timer(self.busy_ns);
                 try {
                     if (m_executor)
                     {
@@ -143,6 +173,7 @@ void Workers::WorkerLoop(size_t index)
             Task task = std::move(*task_ptr);
             self.pool.Release(task_ptr);
 
+            ScopedBusyTimer busy_timer(self.busy_ns);
             if (m_executor)
             {
                 m_executor(std::move(task));
@@ -377,13 +408,19 @@ bool Workers::IsIdle(size_t worker_index) const
     if (worker_index >= m_workers.size()) return true;
     const Worker& w = *m_workers[worker_index];
     if (!w.high_queue.IsEmpty() || !w.normal_queue.IsEmpty()) return false;
-    for (const auto& q : w.inject_queues) 
+    for (const auto& q : w.inject_queues)
     {
         if (!q.IsEmpty()) return false;
     }
     return true;
 }
 
+
+uint64_t Workers::GetBusyNs(size_t worker_index) const noexcept
+{
+    if (worker_index >= m_workers.size()) return 0;
+    return m_workers[worker_index]->busy_ns.load(std::memory_order_relaxed);
+}
 
 RequeueStallStats Workers::GetRequeueStallStats() const
 {

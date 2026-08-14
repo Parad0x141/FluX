@@ -238,15 +238,18 @@ void Scheduler::ExecuteTask(Task task)
 void Scheduler::Run()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_workers)
-        return; // Already running
+    if (m_workers) return;
 
     auto executor = [this](Task&& task) { ExecuteTask(std::move(task)); };
-    m_workers = std::make_unique<Workers>(GetHardwareThreadsCount(), std::move(executor));
+
     // Safe to construct Workers (spawns threads) while holding m_mutex: a
     // freshly-started worker finds every queue empty and never calls back
     // into Scheduler (DrainFallbackQueue only runs after a task actually
     // executes) until real work exists, so there's no re-entrancy risk here.
+    m_workers = std::make_unique<Workers>(GetHardwareThreadsCount(), std::move(executor));
+
+    // Atomically publish
+    m_workers_atomic.store(m_workers.get(), std::memory_order_release);
 
     while (!m_tasks_to_dispatch.empty())
     {
@@ -263,10 +266,11 @@ void Scheduler::Run()
 
 int64_t Scheduler::GetTasksStolen() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_workers) return 0;
-    return m_workers->GetStealCount();
+    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
+    return w ? w->GetStealCount() : 0;
 }
+
+
 
 Scheduler::~Scheduler()
 {
@@ -286,8 +290,8 @@ Scheduler::~Scheduler()
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         workers_to_join = std::move(m_workers);
+        m_workers_atomic.store(nullptr, std::memory_order_release);
     }
-    // workers_to_join destroyed here, lock already released.
 }
 
 Task Scheduler::GetTaskSnapshot(uint64_t task_id)
@@ -343,7 +347,18 @@ Task Scheduler::GetTaskById(uint64_t task_id)
 
 RequeueStallStats Scheduler::GetRequeueStallStats() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_workers) return {};
-    return m_workers->GetRequeueStallStats();
+    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
+    return w ? w->GetRequeueStallStats() : RequeueStallStats{};
+}
+
+size_t Scheduler::GetWorkerCount() const
+{
+    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
+    return w ? w->GetWorkerCount() : 0;
+}
+
+uint64_t Scheduler::GetWorkerBusyNs(size_t worker_index) const
+{
+    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
+    return w ? w->GetBusyNs(worker_index) : 0;
 }

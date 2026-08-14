@@ -226,7 +226,7 @@ public:
                 return; // We won the transition; slot is now free for its next cycle.
             }
             // CAS failed: 'seq' was refreshed to the current value by compare_exchange_weak.
-            // Loop and recheck -- either we retry the transition, or the in_use check
+            // Loop and recheck, either we retry the transition, or the in_use check
             // above now finds it's already released and bails cleanly.
         }
     }
