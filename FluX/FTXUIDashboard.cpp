@@ -231,10 +231,10 @@ void FTXUIDashboard::Run()
             stat_rows.push_back(hbox({ text("  Total Time      : "), text(std::to_string(m_last_total_ms.load(std::memory_order_relaxed)) + " milliseconds") }));
             stat_rows.push_back(hbox({ text("  Throughput      : "), text(tp.str() + " million tasks per second") }));
             stat_rows.push_back(hbox({ text("  Requeue stall hits    : "), text(std::to_string(stall.hits)) }));
-            stat_rows.push_back(hbox({ text("  Total spins    : "), text(std::to_string(stall.hits)) }));
+            stat_rows.push_back(hbox({ text("  Total spins    : "), text(std::to_string(stall.spins)) }));
 
             stat_rows.push_back(separator());
-            stat_rows.push_back(text("Per-Priority Latency (cumulative, queue time):") | bold);
+            stat_rows.push_back(text("Per-Priority Latency (Fresh every run):") | bold);
 
             static constexpr const char* kPrioNames[] = { "Low", "Normal", "AboveNormal", "High" };
             for (int p = 0; p < 4; ++p)
