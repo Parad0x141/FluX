@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <atomic>
 
 class Scheduler;
 
@@ -82,6 +83,10 @@ private:
     std::atomic<int64_t>  m_baseline_completed{ 0 };
     std::atomic<int64_t>  m_baseline_failed{ 0 };
     std::atomic<int64_t> m_baseline_stolen{ 0 };
+    // NOTE: no per-priority baseline array here (there used to be one).
+    // Per-priority stats are isolated per-run via Scheduler::ResetPriorityStats(),
+    // called at the top of RunBenchmarkThread() -- see the comment there for
+    // why baseline-subtraction doesn't work for a cumulative max.
 
     std::atomic<int64_t>  m_last_num_tasks{ 0 };
     std::atomic<int64_t>  m_last_submit_ms{ 0 };

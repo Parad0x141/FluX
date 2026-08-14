@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <array>
 #include "Types.hpp"
 #include "ChaseLevDeque.hpp"
 #include "MPMCQueue.hpp"
@@ -38,27 +39,39 @@
 /// - pool: Object pool for Task allocation (avoids heap allocation on hot path).
 /// - mtx: Mutex for future extensibility (currently unused in hot path).
 /// - shutdown: Atomic flag for graceful worker termination.
+/// Per-worker state: owns a work-stealing deque, injection queues, and task pool.
+/// 
+/// - high_queue / normal_queue: Owner-only work-stealing deques for high and normal priorities.
+///   Owner pops from high_queue first (LIFO), then normal_queue.
+///   Thieves steal from high_queue first, then normal_queue (FIFO).
+/// - inject_queues: Array of MPMC queues indexed by TaskPriority for external submissions.
+/// - pool: Object pool for Task allocation (avoids heap allocation on hot path).
+/// - shutdown: Atomic flag for graceful worker termination.
 struct Worker
 {
 #ifdef FLUX_STRESS_STEAL_WINDOW
-    Worker() : queue(4096) {}   // small capacity -> frequent wraps under stress test
+    Worker() : high_queue(4096), normal_queue(4096) {}
 #else
-    Worker() : queue(65536) {}
+    Worker() : high_queue(65536), normal_queue(65536) {}
 #endif
-    Worker(const Worker&) = delete;
-    Worker& operator=(const Worker&) = delete;
-    Worker(Worker&&) = delete;
-    Worker& operator=(Worker&&) = delete;
 
-    std::thread::id id;                              ///< Thread ID (set on thread start).
-    std::thread thread;                              ///< Worker thread handle.
-    ChaseLevDeque<Task> queue;                       ///< Work-stealing deque (owner LIFO, thief FIFO).
-    // MPMCQueue<Task*, 131072> inject_queue;        ///< External submissions (lock-free MPMC).
-    // TaskPool<Task, 131072> pool;                  ///< Task object pool (zero-allocation).
-    MPMCQueue<Task*, 4096> inject_queue;
+    std::thread::id id;
+    std::thread thread;
+
+    ChaseLevDeque<Task> high_queue;
+    ChaseLevDeque<Task> normal_queue;
+
+    std::array<MPMCQueue<Task*, 4096>, 4> inject_queues;
+
     TaskPool<Task, 4096> pool;
-    std::atomic<bool> shutdown{false};               ///< Termination flag (checked in WorkerLoop).
+    std::atomic<bool> shutdown{ false };
+
+    std::atomic<uint64_t> requeue_stall_hits{ 0 };
+    std::atomic<uint64_t> requeue_stall_spins{ 0 };
 };
+
+struct RequeueStallStats { uint64_t hits = 0; uint64_t spins = 0; };
+
 
 /// Manages a fixed set of worker threads with work-stealing.
 /// 
@@ -101,6 +114,9 @@ public:
     /// Total successful steals across all workers.
     int64_t GetStealCount() const noexcept { return steal_count.load(std::memory_order_relaxed); }
 
+    RequeueStallStats GetRequeueStallStats() const;
+
+
 private:
     /// Main worker loop: execute local tasks, drain injections, steal, yield.
     void WorkerLoop(size_t index);
@@ -115,11 +131,13 @@ private:
     /// Was meant for debugging, dead code finally not impl.
     bool TryStealFromVictim(size_t thief_index, size_t victim_index, Task& out_task);
 
+
     int                                  m_hardware_threads_count; ///< Number of worker threads.
     std::vector<std::unique_ptr<Worker>> m_workers;                ///< Worker states (owned).
     alignas(64) std::atomic<size_t>      m_round_robin_index{0};   ///< Round-robin counter (cache-line aligned).
     alignas(64) std::atomic<size_t>      m_steal_start{0};         ///< Steal victim start index (cache-line aligned).
     alignas(64) std::atomic<int64_t>     steal_count{ 0 };         ///< Total successful steals.
+
     Executor m_executor;                                           ///< Task execution callback.
 
 };

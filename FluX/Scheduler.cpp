@@ -23,6 +23,34 @@
 #include <iostream>
 #endif
 
+PriorityStatsSnapshot Scheduler::GetPriorityStats(TaskPriority p) const
+{
+    const auto& stats = m_priority_stats[static_cast<size_t>(p)];
+    PriorityStatsSnapshot out;
+    out.completed_count = stats.completed_count.load(std::memory_order_relaxed);
+    int64_t total_ns = stats.total_latency_ns.load(std::memory_order_relaxed);
+    out.avg_latency_us = out.completed_count > 0
+        ? (static_cast<double>(total_ns) / out.completed_count) / 1000.0
+        : 0.0;
+    out.max_latency_us = stats.max_latency_ns.load(std::memory_order_relaxed) / 1000.0;
+    return out;
+}
+
+void Scheduler::ResetPriorityStats()
+{
+    // Relaxed is consistent with how these fields are read/written
+    // everywhere else (ExecuteTask, GetPriorityStats): they're a racy
+    // diagnostic hint, not a correctness gate. Caller is responsible for
+    // ensuring no task from a previous run is still in flight -> see the
+    // doc comment in Scheduler.hpp.
+    for (auto& stats : m_priority_stats)
+    {
+        stats.completed_count.store(0, std::memory_order_relaxed);
+        stats.total_latency_ns.store(0, std::memory_order_relaxed);
+        stats.max_latency_ns.store(0, std::memory_order_relaxed);
+    }
+}
+
 inline int Scheduler::GetHardwareThreadsCount() const
 {
     return std::thread::hardware_concurrency();
@@ -49,8 +77,8 @@ uint64_t Scheduler::EnqueuFallback(Task task, uint64_t id)
 void Scheduler::DrainFallbackQueue()
 {
     // Wait-free fast path: this runs on EVERY task completion (see
-    // ExecuteTask), so in the common case -- fallback queue empty, which is
-    // effectively always once Run() is up and workers aren't saturated --
+    // ExecuteTask), so in the common case, fallback queue empty, which is
+    // effectively always once Run() is up and workers aren't saturated
     // we must not pay for m_mutex at all. Relaxed is enough: this is a hint,
     // not a correctness gate. If we race a concurrent EnqueuFallback and see
     // stale 0, we just miss draining this cycle; the next completion (or the
@@ -93,7 +121,7 @@ uint64_t Scheduler::AddTask(Task task)
     task.start_time = std::chrono::steady_clock::now();
 
     // Register metadata for tracking (GetTaskSnapshot, Delete, Abort).
-    // Lock-free hot path -- see TaskRegistry.hpp; does not copy task.payload.
+    // Lock-free hot path  see TaskRegistry.hpp; does not copy task.payload.
     m_registry.Register(id, task.priority, task.start_time);
 
     // m_workers is read here and written by the destructor from a different
@@ -147,6 +175,9 @@ void Scheduler::CheckDupeCompletion(uint64_t task_id)
 /// DrainFallbackQueue(), and only past its own fast-path check.
 void Scheduler::ExecuteTask(Task task)
 {
+    auto start_time = task.start_time;
+    TaskPriority priority = task.priority;
+
     task.status = TaskStatus::InProgress;
     m_tasks_in_progress.fetch_add(1, std::memory_order_relaxed);
     std::function<void()> work = std::move(task.payload);
@@ -170,6 +201,26 @@ void Scheduler::ExecuteTask(Task task)
 
     m_tasks_in_progress.fetch_sub(1, std::memory_order_relaxed);
     m_tasks_completed.fetch_add(1, std::memory_order_relaxed);
+
+    // Per-priority latency tracking (queue time: submission -> completion).
+    // Diagnostic only, same "racy hint" spirit as the rest of FluX -- lets
+    // GetPriorityStats() expose starvation empirically (e.g. Low's
+    // max_latency_us ballooning under sustained High load) instead of
+    // guessing from throughput numbers alone.
+    {
+        auto now = std::chrono::steady_clock::now();
+        int64_t latency_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - start_time).count();
+
+        auto& stats = m_priority_stats[static_cast<size_t>(priority)];
+        stats.completed_count.fetch_add(1, std::memory_order_relaxed);
+        stats.total_latency_ns.fetch_add(latency_ns, std::memory_order_relaxed);
+
+        int64_t prev_max = stats.max_latency_ns.load(std::memory_order_relaxed);
+        while (latency_ns > prev_max &&
+            !stats.max_latency_ns.compare_exchange_weak(prev_max, latency_ns, std::memory_order_relaxed)) {
+        }
+    }
 
 #ifdef FLUX_DEBUG_DUPES
     CheckDupeCompletion(task.task_id);
@@ -285,4 +336,12 @@ Task Scheduler::GetTaskById(uint64_t task_id)
     // TaskRegistry no longer retains the payload, so this is now identical
     // to GetTaskSnapshot(). Kept as a separate call for existing call sites.
     return GetTaskSnapshot(task_id);
+}
+
+
+RequeueStallStats Scheduler::GetRequeueStallStats() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_workers) return {};
+    return m_workers->GetRequeueStallStats();
 }

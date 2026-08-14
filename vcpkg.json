@@ -1,12 +1,11 @@
 {
   "name": "flux",
-  "version-string": "0.1.7 Codename Rukia",
+  "version-string": "0.2.0 Codename Zangetsu",
   "description": "FluX - A low-latency C++20 work-stealing task scheduler with lock-free worker queues",
   "homepage": "https://github.com/Parad0x141/FluX",
   "license": "AGPL-3.0-only",
-  "dependencies": [
-    "ftxui"
-  ],
+  "supports": "windows | linux",
+  "dependencies": [ "ftxui" ],
   "builtin-baseline": "e03dc9b29710050cd1018bc5674688108658d327",
   "overrides": [
     {

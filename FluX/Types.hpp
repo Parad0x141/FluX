@@ -33,13 +33,28 @@ enum class SchedulerMode : uint8_t
 };
 
 /// Task priority levels. Higher values indicate higher priority.
-/// Currently used only for initial worker selection; stealing is FIFO regardless of priority.
 enum class TaskPriority : uint8_t
 {
     Low = 0,           ///< Background / best-effort work.
     Normal = 1,        ///< Default priority for most tasks.
     AboveNormal = 2,   ///< Elevated priority, processed before Normal.
     High = 3           ///< Critical / latency-sensitive work.
+};
+
+// reserved
+struct PriorityStats
+{
+    std::atomic<int64_t> completed_count{ 0 };
+    std::atomic<int64_t> total_latency_ns{ 0 };
+    std::atomic<int64_t> max_latency_ns{ 0 };
+};
+
+// Reserved
+struct PriorityStatsSnapshot
+{
+    int64_t completed_count = 0;
+    double avg_latency_us = 0.0;
+    double max_latency_us = 0.0;
 };
 
 /// Lifecycle state of a task. Transitions are monotonic:

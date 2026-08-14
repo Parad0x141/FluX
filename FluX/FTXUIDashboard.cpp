@@ -61,20 +61,42 @@ void FTXUIDashboard::RunBenchmarkThread(int64_t num_tasks)
     m_baseline_stolen.store(baseline_stolen, std::memory_order_relaxed);
     m_last_num_tasks.store(num_tasks, std::memory_order_relaxed);
 
+    // Per-priority stats (completed_count/avg/max latency) are cumulative
+    // for the process lifetime (see Scheduler::GetPriorityStats). Unlike
+    // completed/failed/stolen above, they can't be fixed up with a baseline
+    // snapshot + subtraction after the fact: max_latency_ns in particular is
+    // not reducible that way (a lower max this run wouldn't overwrite a
+    // higher max left over from the previous run). Reset them here instead,
+    // right before submitting safe because we only reach this point once
+    // the previous run's thread has fully joined (see the launch_button
+    // handler in Run()), so nothing is in flight to race with the reset.
+    m_scheduler.ResetPriorityStats();
+
     auto start = std::chrono::high_resolution_clock::now();
 
+    // Mixed priority distribution: skewed toward Normal (dominant in
+    // practice) but enough High/AboveNormal/Low traffic to actually
+    // exercise high_queue routing, overflow, and scan order -- previously
+    // every task here was TaskPriority::Normal, which validated nothing
+    // about priority handling.
     for (int64_t i = 0; i < num_tasks; ++i)
     {
         Task task;
         task.payload = [i]
             {
                 // Same minimal synthetic workload as the console benchmark in
-                // FluX.cpp -- keeps the two modes comparable.
+                // FluX.cpp, keeps the two modes comparable.
                 volatile int x = 0;
                 for (int j = 0; j < 100; ++j) x += j;
                 (void)x;
             };
-        task.priority = TaskPriority::Normal;
+
+        int roll = static_cast<int>(i % 100);
+        if (roll < 5)        task.priority = TaskPriority::Low;
+        else if (roll < 75)  task.priority = TaskPriority::Normal;
+        else if (roll < 90)  task.priority = TaskPriority::AboveNormal;
+        else                 task.priority = TaskPriority::High;
+
         m_scheduler.AddTask(std::move(task));
     }
 
@@ -172,6 +194,9 @@ void FTXUIDashboard::Run()
         int64_t stolen = m_scheduler.GetTasksStolen() - m_baseline_stolen.load(std::memory_order_relaxed);
         size_t queued = m_scheduler.GetTasksQueued();
 
+        auto stall = m_scheduler.GetRequeueStallStats();
+
+
         int64_t num_tasks = m_last_num_tasks.load(std::memory_order_relaxed);
         float progress = (num_tasks > 0)
             ? std::min(1.0f, static_cast<float>(completed + failed) / static_cast<float>(num_tasks))
@@ -186,11 +211,11 @@ void FTXUIDashboard::Run()
             hbox({ text("Progress            : "), gauge(progress) | flex,
                    text(" " + std::to_string(static_cast<int64_t>(progress * 100)) + "%") }),
             separator(),
-            hbox({ text("Completed           : "), text(std::to_string(completed)) }),
-            hbox({ text("Currently Running   : "), text(std::to_string(in_progress)) }),
-            hbox({ text("Failed              : "), text(std::to_string(failed)) }),
-            hbox({ text("Stolen              : "), text(std::to_string(stolen)) }),
-            hbox({ text("Waiting             : "), text(std::to_string(queued)) }),
+            hbox({ text("Completed                      : "), text(std::to_string(completed)) }),
+            hbox({ text("Currently Running              : "), text(std::to_string(in_progress)) }),
+            hbox({ text("Failed                         : "), text(std::to_string(failed)) }),
+            hbox({ text("Stolen                         : "), text(std::to_string(stolen)) }),
+            hbox({ text("Waiting                        : "), text(std::to_string(queued)) }),
         };
 
         if (!running && m_last_total_ms.load(std::memory_order_relaxed) > 0)
@@ -205,6 +230,28 @@ void FTXUIDashboard::Run()
             stat_rows.push_back(hbox({ text("  Execution Time  : "), text(std::to_string(m_last_exec_ms.load(std::memory_order_relaxed)) + " milliseconds") }));
             stat_rows.push_back(hbox({ text("  Total Time      : "), text(std::to_string(m_last_total_ms.load(std::memory_order_relaxed)) + " milliseconds") }));
             stat_rows.push_back(hbox({ text("  Throughput      : "), text(tp.str() + " million tasks per second") }));
+            stat_rows.push_back(hbox({ text("  Requeue stall hits    : "), text(std::to_string(stall.hits)) }));
+            stat_rows.push_back(hbox({ text("  Total spins    : "), text(std::to_string(stall.hits)) }));
+
+            stat_rows.push_back(separator());
+            stat_rows.push_back(text("Per-Priority Latency (cumulative, queue time):") | bold);
+
+            static constexpr const char* kPrioNames[] = { "Low", "Normal", "AboveNormal", "High" };
+            for (int p = 0; p < 4; ++p)
+            {
+                auto s = m_scheduler.GetPriorityStats(static_cast<TaskPriority>(p));
+                std::ostringstream avg, max;
+                avg << std::fixed << std::setprecision(2) << s.avg_latency_us;
+                max << std::fixed << std::setprecision(2) << s.max_latency_us;
+
+                stat_rows.push_back(hbox({
+                    text(std::string("  ") + kPrioNames[p]) | size(WIDTH, EQUAL, 14),
+                    text("completed: " + std::to_string(s.completed_count)) | size(WIDTH, EQUAL, 20),
+                    text("avg: " + avg.str() + " us") | size(WIDTH, EQUAL, 18),
+                    text("max: " + max.str() + " us"),
+                    }));
+            }
+
         }
 
         if (!m_status_line.empty())

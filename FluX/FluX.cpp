@@ -28,9 +28,6 @@
 #include "FTXUIDashboard.hpp"
 
 
-/// Console benchmark: submit and execute NUM_TASKS tasks, measure throughput.
-/// Unchanged behavior from before -- this is the USE_FTXUI_DASHBOARD == false
-/// path in main() below.
 static void RunConsoleBenchmark(Scheduler& scheduler)
 {
     std::cout << "Scheduler running, adding tasks...\n" << std::flush;
@@ -38,33 +35,33 @@ static void RunConsoleBenchmark(Scheduler& scheduler)
     const int64_t NUM_TASKS = 10000;
     auto start = std::chrono::high_resolution_clock::now();
 
-    // Submit tasks
+    // Mixed priority distribution: skewed toward Normal (dominant in
+    // practice) but enough High/AboveNormal/Low traffic to actually
+    // exercise high_queue routing, overflow, and scan order  previous
+    // runs used TaskPriority::Normal exclusively and validated nothing
+    // about priority handling.
     for (int64_t i = 0; i < NUM_TASKS; ++i)
     {
         Task task;
 
         task.payload = [i]
             {
-                // Minimal work: prevent compiler from optimizing away
                 volatile int x = 0;
                 for (int j = 0; j < 100; ++j) x += j;
                 (void)x;
             };
 
-        /*
-        task.payload = [i]
-        {
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
-        };*/
+        int roll = static_cast<int>(i % 100);
+        if (roll < 5)        task.priority = TaskPriority::Low;
+        else if (roll < 75)  task.priority = TaskPriority::Normal;
+        else if (roll < 90)  task.priority = TaskPriority::AboveNormal;
+        else                 task.priority = TaskPriority::High;
 
-
-        task.priority = TaskPriority::Normal;
         scheduler.AddTask(std::move(task));
     }
 
     auto submit_end = std::chrono::high_resolution_clock::now();
 
-    // Wait for all tasks to complete (polling with 10ms sleep)
     while (true)
     {
         int64_t completed = scheduler.GetTasksCompleted();
@@ -81,6 +78,7 @@ static void RunConsoleBenchmark(Scheduler& scheduler)
     auto submit_ms = std::chrono::duration_cast<std::chrono::milliseconds>(submit_end - start).count();
     auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     auto exec_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - submit_end).count();
+    auto stall = scheduler.GetRequeueStallStats();
 
     double throughput = NUM_TASKS * 1000.0 / total_ms;
 
@@ -89,16 +87,25 @@ static void RunConsoleBenchmark(Scheduler& scheduler)
     std::cout << "Submit time: " << FormatWithCommas(submit_ms) << " ms\n";
     std::cout << "Execution time: " << FormatWithCommas(exec_ms) << " ms\n";
     std::cout << "Total time: " << FormatWithCommas(total_ms) << " ms\n";
-    // std::fixed + setprecision(0): plain integer count, no scientific
-    // notation. Default cout formatting has only 6 significant digits of
-    // precision before it silently switches to "1.23e+06"-style output --
-    // that's what was happening above 999,999 tasks/sec.
     std::cout << "Throughput: " << FormatWithCommas(static_cast<uint64_t>(throughput))
         << " tasks/sec (" << std::fixed << std::setprecision(2)
         << (throughput / 1'000'000.0) << "M/sec)\n";
     std::cout << "Completed: " << FormatWithCommas(scheduler.GetTasksCompleted()) << "\n";
     std::cout << "Failed: " << FormatWithCommas(scheduler.GetTasksFailed()) << "\n";
     std::cout << "Steals: " << FormatWithCommas(scheduler.GetTasksStolen()) << "\n";
+    std::cout << "Requeue-stall hits: " << FormatWithCommas(stall.hits)
+        << " (spins: " << FormatWithCommas(stall.spins) << ")\n";
+
+    std::cout << "\n=== PER-PRIORITY LATENCY (queue time, us) ===\n";
+    static constexpr const char* kNames[] = { "Low", "Normal", "AboveNormal", "High" };
+    for (int p = 0; p < 4; ++p)
+    {
+        auto s = scheduler.GetPriorityStats(static_cast<TaskPriority>(p));
+        std::cout << std::setw(12) << kNames[p]
+            << " | completed: " << std::setw(10) << FormatWithCommas(s.completed_count)
+            << " | avg: " << std::fixed << std::setprecision(2) << std::setw(10) << s.avg_latency_us << " us"
+            << " | max: " << std::setw(10) << s.max_latency_us << " us\n";
+    }
 }
 
 int main()
