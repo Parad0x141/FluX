@@ -89,15 +89,16 @@ void Scheduler::DrainFallbackQueue()
         return;
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (!m_workers) return; // Moved inside the lock: m_workers is written
-    // (destructor) and read (here, AddTask,
-    // GetTasksStolen) from different threads, so
-    // every access must go through m_mutex.
+    // Load the canonical workers reference. The shared_ptr copy keeps Workers
+    // alive for the duration of this drain attempt, preventing use-after-free
+    // if the destructor races with this call.
+    auto workers = m_workers_atomic.load(std::memory_order_acquire);
+    if (!workers) return; // Workers not started or destroyed.
 
     while (!m_tasks_to_dispatch.empty())
     {
         Task& front = m_tasks_to_dispatch.front();
-        if (!m_workers->SubmitTask(front, front.priority))
+        if (!workers->SubmitTask(front, front.priority))
         {
             break; // Still saturated: stop, retry on next completion.
         }
@@ -109,45 +110,39 @@ void Scheduler::DrainFallbackQueue()
 /// Submit a task for execution.
 uint64_t Scheduler::AddTask(Task task)
 {
-    // No work to do
-    if (!task.payload)
+    if (!task.payload || task.status != TaskStatus::Idle)
         return 0;
 
-    if (task.status != TaskStatus::Idle)
-        return 0; // Already submitted
-
-    // Assign unique monotonic ID
     uint64_t id = m_next_task_id++;
     task.task_id = id;
     task.status = TaskStatus::Queued;
     task.start_time = std::chrono::steady_clock::now();
 
-    // Register metadata for tracking (GetTaskSnapshot, Delete, Abort).
-    // Lock-free hot path  see TaskRegistry.hpp; does not copy task.payload.
     m_registry.Register(id, task.priority, task.start_time);
 
-    // m_workers is read here and written by the destructor from a different
-    // thread, so this whole check-and-submit must happen under m_mutex (see
-    // DrainFallbackQueue's comment above for the full rationale). The
-    // critical section stays short: a pointer check plus one already
-    // lock-free SubmitTask() call, not the heavy path this used to guard
-    // before TaskRegistry.
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    if (m_workers)
+    // Fast path: wait-free load of workers. If present, try direct submission.
+    // The shared_ptr copy keeps Workers alive for this call even if destructor races.
+    auto workers = m_workers_atomic.load(std::memory_order_acquire);
+    if (workers)
     {
         TaskPriority priority = task.priority;
-        if (m_workers->SubmitTask(task, priority))
+        if (workers->SubmitTask(task, priority))
             return id;
-
-        // Worker injection queue full: fall back to internal queue.
-        return EnqueuFallback(std::move(task), id);
+        // Fall through to fallback (lock required for m_tasks_to_dispatch).
     }
 
-    // Workers not started yet: queue internally
+    // Slow path: either workers not started, or submission failed (saturation).
+    // Re-check under lock to avoid race with concurrent Run().
+    std::lock_guard<std::mutex> lock(m_mutex);
+    workers = m_workers_atomic.load(std::memory_order_acquire);
+    if (workers)
+    {
+        TaskPriority priority = task.priority;
+        if (workers->SubmitTask(task, priority))
+            return id;
+    }
     return EnqueuFallback(std::move(task), id);
 }
-
 #ifdef FLUX_DEBUG_DUPES
 /// DEBUG: lock-free — one relaxed fetch_add on a pre-sized array, no mutex, no map.
 /// task_id must stay under kDebugSeenCapacity (bump it if you run more tasks).
@@ -238,7 +233,9 @@ void Scheduler::ExecuteTask(Task task)
 void Scheduler::Run()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_workers) return;
+    // Idempotency check: already running or destroyed.
+    if (m_workers_atomic.load(std::memory_order_acquire))
+        return;
 
     auto executor = [this](Task&& task) { ExecuteTask(std::move(task)); };
 
@@ -246,16 +243,21 @@ void Scheduler::Run()
     // freshly-started worker finds every queue empty and never calls back
     // into Scheduler (DrainFallbackQueue only runs after a task actually
     // executes) until real work exists, so there's no re-entrancy risk here.
-    m_workers = std::make_unique<Workers>(GetHardwareThreadsCount(), std::move(executor));
+    auto workers = std::make_shared<Workers>(GetHardwareThreadsCount(), std::move(executor));
 
-    // Atomically publish
-    m_workers_atomic.store(m_workers.get(), std::memory_order_release);
+    // Atomically publish the shared_ptr. The release store synchronizes-with
+    // the acquire load in getters, ensuring they see the fully-constructed
+    // Workers object. The shared_ptr reference count guarantees the object
+    // stays alive as long as any getter holds a copy, preventing use-after-free
+    // when a getter races with the destructor.
+    m_workers_atomic.store(workers, std::memory_order_release);
 
+    // Drain any tasks that were queued before Run() was called.
     while (!m_tasks_to_dispatch.empty())
     {
         Task task = std::move(m_tasks_to_dispatch.front());
         m_tasks_to_dispatch.pop_front();
-        if (!m_workers->SubmitTask(task, task.priority))
+        if (!workers->SubmitTask(task, task.priority))
         {
             m_tasks_to_dispatch.push_front(std::move(task));
             break;
@@ -266,33 +268,30 @@ void Scheduler::Run()
 
 int64_t Scheduler::GetTasksStolen() const
 {
-    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
-    return w ? w->GetStealCount() : 0;
+    // Acquire-load the shared_ptr. The reference count increment ensures the
+    // Workers object stays alive for the duration of this call, even if the
+    // destructor runs concurrently and releases its shared_ptr.
+    auto workers = m_workers_atomic.load(std::memory_order_acquire);
+    return workers ? workers->GetStealCount() : 0;
 }
 
 
 
 Scheduler::~Scheduler()
 {
-    // Move m_workers out under the lock: this makes the "is m_workers null"
-    // state change atomically visible to any thread checking it in AddTask/
-    // DrainFallbackQueue/GetTasksStolen. The actual object -- and its
-    // blocking join() of every worker thread -- is destroyed just below,
-    // OUTSIDE the lock. That ordering matters: Workers::~Workers() joins
-    // worker threads, and a worker thread might itself be blocked trying to
-    // acquire m_mutex (e.g. inside DrainFallbackQueue) at that very moment.
-    // If we joined while still holding m_mutex, that worker could never
-    // reach the check that would let it return and finish -- deadlock. By
-    // releasing the lock first, that worker sees m_workers == nullptr as
-    // soon as it acquires m_mutex, returns immediately, and the join below
-    // can proceed without ever contending on m_mutex again.
-    std::unique_ptr<Workers> workers_to_join;
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        workers_to_join = std::move(m_workers);
-        m_workers_atomic.store(nullptr, std::memory_order_release);
-    }
+    // Atomically release the Workers pointer. Any getter that already loaded
+    // a shared_ptr copy keeps the Workers object alive until it finishes.
+    // The actual Workers destruction (including the blocking join() of all
+    // worker threads) happens when this local 'to_destroy' is destroyed
+    // at the end of this function, OUTSIDE any lock. This avoids deadlocks
+    // where a worker blocked on m_mutex in DrainFallbackQueue() could never
+    // release the lock if we joined while holding it.
+    auto to_destroy = m_workers_atomic.exchange(nullptr, std::memory_order_acq_rel);
+    // No lock is held here. m_mutex only guards the fallback queue, which is
+    // irrelevant during destruction as no new tasks can be added.
+    // to_destroy goes out of scope, joining all worker threads.
 }
+
 
 Task Scheduler::GetTaskSnapshot(uint64_t task_id)
 {
@@ -347,18 +346,27 @@ Task Scheduler::GetTaskById(uint64_t task_id)
 
 RequeueStallStats Scheduler::GetRequeueStallStats() const
 {
-    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
-    return w ? w->GetRequeueStallStats() : RequeueStallStats{};
+    // Acquire-load the shared_ptr. The reference count increment ensures the
+    // Workers object stays alive for the duration of this call, even if the
+    // destructor runs concurrently and releases its shared_ptr.
+    auto workers = m_workers_atomic.load(std::memory_order_acquire);
+    return workers ? workers->GetRequeueStallStats() : RequeueStallStats{};
 }
 
 size_t Scheduler::GetWorkerCount() const
 {
-    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
-    return w ? w->GetWorkerCount() : 0;
+    // Acquire-load the shared_ptr. The reference count increment ensures the
+    // Workers object stays alive for the duration of this call, even if the
+    // destructor runs concurrently and releases its shared_ptr.
+    auto workers = m_workers_atomic.load(std::memory_order_acquire);
+    return workers ? workers->GetWorkerCount() : 0;
 }
 
 uint64_t Scheduler::GetWorkerBusyNs(size_t worker_index) const
 {
-    Workers* w = m_workers_atomic.load(std::memory_order_acquire);
-    return w ? w->GetBusyNs(worker_index) : 0;
+    // Acquire-load the shared_ptr. The reference count increment ensures the
+    // Workers object stays alive for the duration of this call, even if the
+    // destructor runs concurrently and releases its shared_ptr.
+    auto workers = m_workers_atomic.load(std::memory_order_acquire);
+    return workers ? workers->GetBusyNs(worker_index) : 0;
 }

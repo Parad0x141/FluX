@@ -172,17 +172,19 @@ namespace flux {
         /// total_latency_ns: sum of (completion_time - start_time) in ns, for averaging.
         /// max_latency_ns: worst-case latency seen for that priority -- the number
         /// that actually exposes starvation, since averages hide outliers.
-
-
         std::array<PriorityStats, 4> m_priority_stats; ///< Indexed by TaskPriority.
-
 
         std::atomic<uint64_t> m_next_task_id{ 1 };             ///< Monotonic task ID generator.
 
-        std::unique_ptr<Workers> m_workers;                  ///< Worker thread pool (created on Run).
-        std::atomic<Workers*> m_workers_atomic{ nullptr };   // Atomic publish for wait free getters
+        /// Canonical (and only) reference to the worker thread pool.
+        /// Atomic publish for wait-free getters. Using shared_ptr ensures the Workers
+        /// object stays alive as long as any getter holds a copy, preventing use-after-free
+        /// when a getter races with the destructor. The acquire/release ordering on the
+        /// atomic synchronizes publication of the fully-constructed object.
+        std::atomic<std::shared_ptr<Workers>> m_workers_atomic{ nullptr };
 
-        mutable std::mutex m_mutex;                          ///< Protects m_tasks_to_dispatch, m_workers pointer swaps.
+        /// Protects m_tasks_to_dispatch (and by extension keeps m_fallback_pending in sync).
+        mutable std::mutex m_mutex;
     };
 
 } // namespace flux

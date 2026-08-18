@@ -1,9 +1,12 @@
 <Solution>
   <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Instrumentation" />
+    <BuildType Name="Release" />
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
   <Project Path="FluX/FluX.vcxproj" Id="e8639700-40a2-4543-b957-41d95e290f5d">
-    <BuildType Solution="Debug|x64" Project="Release" />
+    <BuildType Solution="Instrumentation|x64" Project="Release" />
   </Project>
 </Solution>

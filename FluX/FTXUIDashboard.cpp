@@ -84,9 +84,9 @@ void FTXUIDashboard::RunBenchmarkThread(int64_t num_tasks)
     // cumulative for its whole process lifetime (see class comment in the
     // header), so every number this dashboard shows for "this run" is a
     // delta against this baseline, not the Scheduler's raw totals.
-    int64_t  baseline_completed = m_scheduler.GetTasksCompleted();
-    int64_t  baseline_failed = m_scheduler.GetTasksFailed();
-    int64_t  baseline_stolen = m_scheduler.GetTasksStolen();
+    int64_t baseline_completed = m_scheduler.GetTasksCompleted();
+    int64_t baseline_failed = m_scheduler.GetTasksFailed();
+    int64_t baseline_stolen = m_scheduler.GetTasksStolen();
 
     m_baseline_completed.store(baseline_completed, std::memory_order_relaxed);
     m_baseline_failed.store(baseline_failed, std::memory_order_relaxed);
@@ -118,11 +118,10 @@ void FTXUIDashboard::RunBenchmarkThread(int64_t num_tasks)
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    // Mixed priority distribution: skewed toward Normal (dominant in
-    // practice) but enough High/AboveNormal/Low traffic to actually
-    // exercise high_queue routing, overflow, and scan order -- previously
-    // every task here was TaskPriority::Normal, which validated nothing
-    // about priority handling.
+    const size_t BATCH_SIZE = 8192;  // Ajustable: 1024, 2048, 4096, 8192
+    std::vector<Task> batch;
+    batch.reserve(BATCH_SIZE);
+
     for (int64_t i = 0; i < num_tasks; ++i)
     {
         Task task;
@@ -130,9 +129,9 @@ void FTXUIDashboard::RunBenchmarkThread(int64_t num_tasks)
             {
                 // Same minimal synthetic workload as the console benchmark in
                 // FluX.cpp, keeps the two modes comparable.
-                volatile int x = 0;
-                for (int j = 0; j < 100; ++j) x += j;
-                (void)x;
+                    volatile int x = 0;
+                    for (int j = 0; j < 100; ++j) x += j;
+                    (void)x;
             };
 
         int roll = static_cast<int>(i % 100);
@@ -141,7 +140,25 @@ void FTXUIDashboard::RunBenchmarkThread(int64_t num_tasks)
         else if (roll < 90)  task.priority = TaskPriority::AboveNormal;
         else                 task.priority = TaskPriority::High;
 
-        m_scheduler.AddTask(std::move(task));
+        batch.push_back(std::move(task));
+
+        if (batch.size() >= BATCH_SIZE)
+        {
+            for (auto& t : batch)
+            {
+                m_scheduler.AddTask(std::move(t));
+            }
+            batch.clear();
+        }
+    }
+
+    if (!batch.empty())
+    {
+        for (auto& t : batch)
+        {
+            m_scheduler.AddTask(std::move(t));
+        }
+        batch.clear();
     }
 
     auto submit_end = std::chrono::high_resolution_clock::now();

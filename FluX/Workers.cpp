@@ -125,7 +125,8 @@ void Workers::WorkerLoop(size_t index)
                         stolen_task.payload();
                     }
                 }
-                catch (const std::exception& e) {
+                catch (const std::exception& e)
+                {
                     std::cerr << "Worker " << index << ": stolen task threw: " << e.what() << "\n";
                 }
                 catch (...)
