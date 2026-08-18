@@ -1,6 +1,6 @@
 {
   "name": "flux",
-  "version-string": "0.2.2 Codename Kisuke",
+  "version-string": "0.2.7 Codename Hōgyoku",
   "description": "FluX - A low-latency C++20 work-stealing task scheduler with lock-free worker queues",
   "homepage": "https://github.com/Parad0x141/FluX",
   "license": "AGPL-3.0-only",
